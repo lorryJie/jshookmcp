@@ -4,6 +4,7 @@ export interface ChromeLaunchOverrides {
   headless?: boolean;
   args?: string[];
   enableV8NativesSyntax?: boolean;
+  userDataDir?: string;
 }
 
 export interface ResolvedChromeLaunchOptions {
@@ -11,6 +12,7 @@ export interface ResolvedChromeLaunchOptions {
   args: string[];
   executablePath?: string;
   v8NativeSyntaxEnabled: boolean;
+  userDataDir?: string;
 }
 
 export interface CodeCollectorLaunchResult {
@@ -130,6 +132,7 @@ export function resolveChromeLaunchOptions(
     args: merged.args,
     executablePath,
     v8NativeSyntaxEnabled: merged.v8NativeSyntaxEnabled,
+    userDataDir: overrides?.userDataDir || process.env.PUPPETEER_USER_DATA_DIR || undefined,
   };
 }
 
@@ -145,6 +148,7 @@ export function sameChromeLaunchOptions(
     left.headless !== right.headless ||
     left.executablePath !== right.executablePath ||
     left.v8NativeSyntaxEnabled !== right.v8NativeSyntaxEnabled ||
+    left.userDataDir !== right.userDataDir ||
     left.args.length !== right.args.length
   ) {
     return false;

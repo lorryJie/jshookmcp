@@ -252,6 +252,9 @@ export class CodeCollector {
     if (launchOptions.executablePath) {
       browserLaunchOptions.executablePath = launchOptions.executablePath;
     }
+    if (launchOptions.userDataDir) {
+      browserLaunchOptions.userDataDir = launchOptions.userDataDir;
+    }
     logger.info('Initializing browser with anti-detection...');
     this.browser = await launch(browserLaunchOptions);
     this.connectedToExistingBrowser = false;

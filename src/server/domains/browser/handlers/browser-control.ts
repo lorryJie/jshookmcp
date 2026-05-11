@@ -28,6 +28,7 @@ type ChromeLaunchRequest = {
   headless?: boolean;
   args?: string[];
   enableV8NativesSyntax?: boolean;
+  userDataDir?: string;
 };
 
 interface BrowserControlHandlersDeps {
@@ -123,6 +124,7 @@ export class BrowserControlHandlers {
       headless: this.parseHeadlessArg(args.headless),
       args: argStringArray(args, 'args'),
       enableV8NativesSyntax: argBool(args, 'enableV8NativesSyntax'),
+      userDataDir: argString(args, 'userDataDir'),
     };
   }
 
