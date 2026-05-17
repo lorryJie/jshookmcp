@@ -15,6 +15,7 @@ import type { ToolProfile } from '@server/ToolCatalog';
 import { getToolDomain } from '@server/ToolCatalog';
 import { ToolExecutionRouter } from '@server/ToolExecutionRouter';
 import { ToolCallContextGuard } from '@server/ToolCallContextGuard';
+import { ToolCircuitBreaker } from '@server/security/ToolCircuitBreaker';
 import { LargeDataOffloader } from '@server/ToolResponseOffloader';
 import { createToolHandlerMap } from '@server/ToolHandlerMap';
 import type { ToolArgs } from '@server/types';
@@ -24,7 +25,11 @@ import { getLoaderMetadata } from '@server/registry/discovery';
 import { refreshDomainTtlForTool } from '@server/MCPServer.activation.ttl';
 import type { DomainTtlEntry } from '@server/MCPServer.activation.ttl';
 import { closeServer, startHttpTransport, startStdioTransport } from '@server/MCPServer.transport';
+import { McpLogTransport } from '@server/transport/McpLogTransport';
+import type { McpLogLevel } from '@server/transport/McpLogTransport';
+import { MCP_LOG_ENABLED, MCP_LOG_FILE_DIR, MCP_LOG_LEVEL } from '@src/constants';
 import { ActivationController } from '@server/activation/ActivationController';
+import { SearchQualityTracker } from '@server/search/SearchQualityTracker';
 import { registerSingleTool as registerSingleToolImpl } from '@server/MCPServer.tools';
 import { registerSearchMetaTools } from '@server/MCPServer.search';
 import { registerServerResources } from '@server/MCPServer.resources';
@@ -182,6 +187,8 @@ export class MCPServer implements MCPServerContext {
   public enabledDomains: Set<string>;
   public readonly router: ToolExecutionRouter;
   public readonly contextGuard: ToolCallContextGuard;
+  public readonly circuitBreaker = new ToolCircuitBreaker();
+  private readonly searchQualityTracker = new SearchQualityTracker();
   /** Offloads large response data (>512KB) to disk / DetailedDataManager to keep context lean. */
   public readonly largeDataOffloader: LargeDataOffloader;
   public readonly handlerDeps: ToolHandlerDeps;
@@ -193,6 +200,8 @@ export class MCPServer implements MCPServerContext {
   private clientInitialized = false;
   private cacheAdaptersRegistered = false;
   private cacheRegistrationPromise?: Promise<void>;
+  /** Structured log transport for MCP `notifications/message`. */
+  public readonly mcpLog = new McpLogTransport();
   public readonly baseTier: ToolProfile;
   public readonly activatedToolNames = new Set<string>();
   public readonly activatedRegisteredTools = new Map<string, RegisteredTool>();
@@ -442,6 +451,16 @@ export class MCPServer implements MCPServerContext {
       },
     );
 
+    // Attach structured MCP log transport
+    this.mcpLog.attach(this.server, MCP_LOG_ENABLED);
+    const validLevels = new Set<string>(['debug', 'info', 'warning', 'error']);
+    if (validLevels.has(MCP_LOG_LEVEL)) {
+      this.mcpLog.setLevel(MCP_LOG_LEVEL as McpLogLevel);
+    }
+    if (MCP_LOG_FILE_DIR) {
+      this.mcpLog.enableFileLogging(MCP_LOG_FILE_DIR);
+    }
+
     // Forward structured logs to the MCP client (only after initialize handshake)
     this.server.server.oninitialized = () => {
       this.clientInitialized = true;
@@ -502,6 +521,14 @@ export class MCPServer implements MCPServerContext {
       } catch {
         // Swallow resource updated notification errors
       }
+    });
+
+    this.eventBus.on('activation:domain_pruned', (payload) => {
+      this.mcpLog.info('jshookmcp', {
+        event: 'domain_pruned',
+        domain: payload.domain,
+        reason: payload.reason,
+      });
     });
 
     this.server.server.setRequestHandler(CompleteRequestSchema, async (request) => {
@@ -607,6 +634,30 @@ export class MCPServer implements MCPServerContext {
       }, timeoutMs);
       timeoutTimer.unref();
 
+      if (this.circuitBreaker.shouldBlock(name)) {
+        const state = this.circuitBreaker.getState(name);
+        const retryAfter = state
+          ? Math.ceil(
+              (this.circuitBreaker.getRecoveryMs() - (Date.now() - state.lastFailureTime)) / 1000,
+            )
+          : 30;
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                success: false,
+                error: `Circuit breaker open for tool "${name}"`,
+                reason: `Tool has failed consecutively ${state?.failureCount ?? 0} times`,
+                retryAfterSeconds: retryAfter,
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+
       let response;
       try {
         response = await this.router.execute(name, args);
@@ -660,6 +711,12 @@ export class MCPServer implements MCPServerContext {
           toolResultSuccess = !enriched.isError;
         }
       }
+      // Circuit breaker: record success or failure
+      if (toolResultSuccess) {
+        this.circuitBreaker.recordSuccess(name);
+      } else {
+        this.circuitBreaker.recordFailure(name);
+      }
       // Emit tool:called event for ActivationController
       void this.eventBus.emit('tool:called', {
         toolName: name,
@@ -672,12 +729,20 @@ export class MCPServer implements MCPServerContext {
           isError: enriched.isError === true,
         },
       });
+      this.searchQualityTracker.associateLastSearch(name);
+      this.mcpLog.info('jshookmcp', {
+        event: 'tool_called',
+        toolName: name,
+        domain: getToolDomain(name) ?? null,
+        success: toolResultSuccess,
+      });
       // Commit pending resource updates to prevent stream flooding
       this.getDomainInstance<import('@server/evidence/ReverseEvidenceGraph').ReverseEvidenceGraph>(
         'evidenceGraph',
       )?.commit();
       return enriched;
     } catch (error) {
+      this.circuitBreaker.recordFailure(name);
       const errorResponse = asErrorResponse(error);
       try {
         this.tokenBudget.recordToolCall(name, args, errorResponse);
@@ -726,6 +791,11 @@ export class MCPServer implements MCPServerContext {
     registerServerResources(this);
     registerServerPrompts(this);
     logger.info(`Registered ${this.selectedTools.length} tools + meta tools with McpServer`);
+    this.mcpLog.info('jshookmcp', {
+      event: 'registry_discovered',
+      domainCount: this.enabledDomains.size,
+      toolCount: this.selectedTools.length,
+    });
   }
 }
 
