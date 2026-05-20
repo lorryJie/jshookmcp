@@ -44,6 +44,8 @@ This section classifies the structural definitions exported versus explicitly ac
 | ------------------------------ | ------------------------------------------ | ---------------------------------------------- |
 | `createExtension(id, version)` | `createExtension('example.demo', '1.0.0')` | Synthesizes a fluent declarative build channel |
 
+Outward-facing plugin metadata is not configured on `ExtensionBuilder`. Use sibling `meta.yaml` fields instead: `name`, `description`, `author`, and `source_repo`.
+
 ### `PluginLifecycleContext` Injected Execution Vectors (6)
 
 These methods operate exclusively within the sandbox closure instantiated during lifecycle hooks.

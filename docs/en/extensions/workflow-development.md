@@ -161,8 +161,8 @@ Telemetric observation channels for distributed trace tracking and metric analys
 
 Assert the lifecycle integrity via the service terminal sequence:
 
-1. `extensions_reload`
-2. `extensions_list`
+1. `reload_extensions`
+2. `list_extensions`
 3. `list_extension_workflows`
 4. `run_extension_workflow`
 

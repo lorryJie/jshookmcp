@@ -70,10 +70,6 @@ export class ExtensionBuilder {
   // ── state ──
   private readonly idValue: string;
   private readonly versionValue: string;
-  private nameValue: string = '';
-  private descriptionValue: string = '';
-  private authorValue: string = '';
-  private sourceRepoValue: string = '';
   private compatibleCoreValue: string = '>=0.1.0';
   private profilesValue: ToolProfileId[] = ['full'];
   private toolsValue: ExtensionToolDefinition[] = [];
@@ -102,18 +98,6 @@ export class ExtensionBuilder {
   }
   get version(): string {
     return this.versionValue;
-  }
-  get pluginName(): string {
-    return this.nameValue;
-  }
-  get pluginDescription(): string {
-    return this.descriptionValue;
-  }
-  get pluginAuthor(): string {
-    return this.authorValue;
-  }
-  get pluginSourceRepo(): string {
-    return this.sourceRepoValue;
   }
   get compatibleCoreRange(): string {
     return this.compatibleCoreValue;
@@ -161,42 +145,8 @@ export class ExtensionBuilder {
 
   // ── setters ──
 
-  name(n: string): this {
-    this.nameValue = n;
-    return this;
-  }
-  description(desc: string): this {
-    this.descriptionValue = desc;
-    return this;
-  }
-  author(a: string): this {
-    this.authorValue = a;
-    return this;
-  }
-  sourceRepo(url: string): this {
-    this.sourceRepoValue = url;
-    return this;
-  }
   compatibleCore(range: string): this {
     this.compatibleCoreValue = range;
-    return this;
-  }
-
-  /**
-   * Merge external metadata (e.g. from meta.yaml) into the builder.
-   * Only fills in fields that the builder chain has NOT explicitly set
-   * (i.e. still at their default empty-string value).
-   */
-  mergeMetadata(meta: {
-    name?: string;
-    description?: string;
-    author?: string;
-    source_repo?: string;
-  }): this {
-    if (!this.nameValue && meta.name) this.nameValue = meta.name;
-    if (!this.descriptionValue && meta.description) this.descriptionValue = meta.description;
-    if (!this.authorValue && meta.author) this.authorValue = meta.author;
-    if (!this.sourceRepoValue && meta.source_repo) this.sourceRepoValue = meta.source_repo;
     return this;
   }
   profile(p: ToolProfileId | ToolProfileId[]): this {

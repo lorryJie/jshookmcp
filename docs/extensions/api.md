@@ -34,6 +34,8 @@
 | ------------------------------ | ------------------------------------------ | -------------------------- |
 | `createExtension(id, version)` | `createExtension('example.demo', '1.0.0')` | 创建 ExtensionBuilder 实例 |
 
+插件对外展示元数据不通过 `ExtensionBuilder` 设置，统一由同级 `meta.yaml` 提供：`name` / `description` / `author` / `source_repo`。
+
 ### PluginLifecycleContext 方法
 
 所有的操作必须通过注入的 `ctx` 对象来进行：

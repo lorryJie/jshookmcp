@@ -39,12 +39,8 @@ describe('plugin', () => {
       expect(ext.compatibleCoreRange).toBe('>=0.1.0');
     });
 
-    it('should allow setting metadata and options', () => {
+    it('should allow setting runtime options', () => {
       const ext = new ExtensionBuilder('id', 'ver')
-        .name('custom-name')
-        .description('desc')
-        .author('author')
-        .sourceRepo('https://repo')
         .compatibleCore('>=1.0.0')
         .profile(['search', 'workflow'])
         .allowCommand('npm')
@@ -57,10 +53,6 @@ describe('plugin', () => {
         .metric(['metric2'])
         .configDefault('k', 'v');
 
-      expect(ext.pluginName).toBe('custom-name');
-      expect(ext.pluginDescription).toBe('desc');
-      expect(ext.pluginAuthor).toBe('author');
-      expect(ext.pluginSourceRepo).toBe('https://repo');
       expect(ext.compatibleCoreRange).toBe('>=1.0.0');
       expect(ext.profiles).toEqual(['search', 'workflow']);
       expect(ext.allowedCommands).toEqual(['npm', 'git', 'npx']);
@@ -68,27 +60,6 @@ describe('plugin', () => {
       expect(ext.allowedTools).toEqual(['tool1', 'tool2']);
       expect(ext.declaredMetrics).toEqual(['metric1', 'metric2']);
       expect(ext.configDefaults).toEqual({ k: 'v' });
-    });
-
-    it('should merge metatada correctly', () => {
-      const ext = createExtension('id', 'ver');
-
-      ext.mergeMetadata({
-        name: 'meta-name',
-        description: 'meta-desc',
-        author: 'meta-author',
-        source_repo: 'meta-repo',
-      });
-
-      expect(ext.pluginName).toBe('meta-name');
-      expect(ext.pluginDescription).toBe('meta-desc');
-      expect(ext.pluginAuthor).toBe('meta-author');
-      expect(ext.pluginSourceRepo).toBe('meta-repo');
-
-      // Merge should not override explicitly set fields
-      ext.name('explicit-name');
-      ext.mergeMetadata({ name: 'meta-name-2' });
-      expect(ext.pluginName).toBe('explicit-name');
     });
 
     it('should add tools', () => {

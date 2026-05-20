@@ -34,6 +34,15 @@ export default createExtension('io.github.example.my-first-plugin', '1.0.0')
   });
 ```
 
+Outward-facing plugin metadata now lives in `meta.yaml`, while `manifest.ts` stays focused on runtime declarations:
+
+```yaml
+name: My First Plugin
+description: Execute DOM mutation and fetch traces.
+author: your-team
+source_repo: https://github.com/your-org/my-first-plugin
+```
+
 **Contract Breakdown:**
 
 - `createExtension(id, version)`: Distinct identity root for the plugin isolated within the core registry.
@@ -65,7 +74,7 @@ pnpm run check
 Prior to mounting, you must supersede the globally conflicting references originating from the template:
 
 - `PLUGIN_ID` (Strictly requires the x.y.z reverse-domain format, e.g., `io.github.example.my-plugin`)
-- Extension Metadata (`manifest.name` / `manifest.pluginVersion` / `manifest.description`)
+- `meta.yaml` fields: `name` / `description` / `author` / `source_repo`
 
 ### 4. Privilege Sandbox Allowlist Clamping
 
@@ -149,12 +158,21 @@ Asserts compliance queries concerning capability declarations mapped against the
 
 Assert the lifecycle integrity via the service terminal sequence:
 
-1. Reinitialize context via `extensions_reload`.
-2. Map capability via `extensions_list`.
-3. Force endpoint resolution utilizing `search_tools`.
+1. Reinitialize context via `reload_extensions`.
+2. Inspect the loaded plugin/tool state via `list_extensions`.
+3. Call the extension tool directly, or use `search_tools` / `describe_tool` to inspect it.
 4. Run `list_extension_workflows` (If Workflow topologies are concurrently injected).
 
 Rerun standard TS-to-JS transpilation chains via `pnpm run build` prior to invoking the subsystem reload probe.
+
+`reload_extensions` now registers extension tools directly into the MCP tool list when they are visible in the current profile. You only need `activate_tools` later for tools outside the current profile, or `call_tool` when a client failed to refresh its cached tool list.
+
+The `tools` array returned by `list_extensions` / `reload_extensions` now exposes:
+
+- `profiles`: declared profile visibility
+- `visibleInCurrentProfile`: whether the tool is visible in the current session profile
+- `active`: whether the tool is currently registered in the tool list
+- `activationSource`: how it became active (`reload` / `activate_tools` / `activate_domain`)
 
 ## Conventional Transgressions
 

@@ -44,8 +44,6 @@ describe('ExtensionBuilder', () => {
 
     it('has default values for optional properties', () => {
       const builder = new ExtensionBuilder('test', '1.0.0');
-      expect(builder.pluginName).toBe('');
-      expect(builder.pluginDescription).toBe('');
       expect(builder.compatibleCoreRange).toBe('>=0.1.0');
       expect(builder.tools).toEqual([]);
       expect(builder.workflows).toEqual([]);
@@ -61,21 +59,7 @@ describe('ExtensionBuilder', () => {
     });
   });
 
-  describe('name / description / compatibleCore', () => {
-    it('name sets name and returns this', () => {
-      const builder = new ExtensionBuilder('test', '1.0.0');
-      const result = builder.name('My Plugin');
-      expect(result).toBe(builder);
-      expect(builder.pluginName).toBe('My Plugin');
-    });
-
-    it('description sets description and returns this', () => {
-      const builder = new ExtensionBuilder('test', '1.0.0');
-      const result = builder.description('A test plugin');
-      expect(result).toBe(builder);
-      expect(builder.pluginDescription).toBe('A test plugin');
-    });
-
+  describe('compatibleCore', () => {
     it('compatibleCore sets version range and returns this', () => {
       const builder = new ExtensionBuilder('test', '1.0.0');
       const result = builder.compatibleCore('^1.0.0');
@@ -250,8 +234,6 @@ describe('ExtensionBuilder', () => {
   describe('fluent chaining', () => {
     it('supports method chaining', () => {
       const builder = createExtension('chain-test', '1.0.0')
-        .name('Chain Test')
-        .description('Testing method chaining')
         .compatibleCore('^1.0.0')
         .allowTool('page_navigate')
         .metric('test.metric')
@@ -262,8 +244,6 @@ describe('ExtensionBuilder', () => {
         .onActivate(async () => {});
 
       expect(builder.id).toBe('chain-test');
-      expect(builder.pluginName).toBe('Chain Test');
-      expect(builder.pluginDescription).toBe('Testing method chaining');
       expect(builder.compatibleCoreRange).toBe('^1.0.0');
       expect(builder.allowedTools).toEqual(['page_navigate']);
       expect(builder.declaredMetrics).toEqual(['test.metric']);
@@ -278,9 +258,8 @@ describe('ExtensionBuilder', () => {
   describe('property access', () => {
     it('properties are accessible via getters', () => {
       const builder = new ExtensionBuilder('test', '1.0.0');
-      builder.name('Test');
-
-      expect(builder.pluginName).toBe('Test');
+      builder.compatibleCore('^2.0.0');
+      expect(builder.compatibleCoreRange).toBe('^2.0.0');
 
       const tools = builder.tools;
       expect(Array.isArray(tools)).toBe(true);

@@ -24,7 +24,11 @@ export const extensionTools: Tool[] = [
     t.desc('List all loaded plugins, workflows, and extension tools.').query(),
   ),
   tool('reload_extensions', (t) =>
-    t.desc('Reload plugins and workflows from configured directories.').openWorld(),
+    t
+      .desc(
+        'Reload plugins and workflows from configured directories, and directly register extension tools visible in the current profile.',
+      )
+      .openWorld(),
   ),
   tool('browse_extension_registry', (t) =>
     t

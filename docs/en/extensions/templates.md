@@ -55,9 +55,9 @@ $env:MCP_PLUGIN_ROOTS = "<path-to-cloned-jshook_plugin_template>"
 
 **Hot-Reload Sequence:**
 
-1. Execute `extensions_reload`
-2. Execute `extensions_list`
-3. Execute `search_tools` to assert the exposure state
+1. Execute `reload_extensions`
+2. Execute `list_extensions`
+3. Call the extension tool directly, or execute `search_tools` to verify visibility
 
 ### Loading Workflows
 
@@ -73,7 +73,7 @@ $env:MCP_WORKFLOW_ROOTS = "<path-to-cloned-jshook_workflow_template>"
 
 **Hot-Reload Sequence:**
 
-1. Execute `extensions_reload`
+1. Execute `reload_extensions`
 2. Execute `list_extension_workflows`
 3. Execute `run_extension_workflow`
 
@@ -82,7 +82,8 @@ $env:MCP_WORKFLOW_ROOTS = "<path-to-cloned-jshook_workflow_template>"
 - The engineering configuration strictly recognizes `manifest.ts` or `workflow.ts` source references only.
 - Local build outputs, specifically `dist/manifest.js` and `dist/workflow.js`, are categorized as derivative artifacts and must not be committed to the repository by convention.
 - The core MCP loader supports concurrent `.ts` and `.js` detection; in conflict scenarios, it enforces a hard prioritization of `.js` to optimize execution tier performance.
-- **Recommended Iteration Loop**: Modify TS source -> Compile Locally -> Trigger `extensions_reload`.
+- Plugin display metadata now uses `meta.yaml` as the single source of truth; do not duplicate `name` / `description` / `author` / `source_repo` in `manifest.ts`.
+- **Recommended Iteration Loop**: Modify TS source -> Compile Locally -> Trigger `reload_extensions`.
 
 ## Official Registry Inclusion Criteria
 

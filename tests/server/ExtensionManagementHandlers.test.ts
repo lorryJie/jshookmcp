@@ -95,8 +95,12 @@ describe('ExtensionManagementHandlers', () => {
     const ctx = {
       reloadExtensions: vi.fn(async () => ({
         addedTools: 0,
+        autoActivatedTools: [],
         pluginCount: 0,
         workflowCount: 1,
+        toolCount: 0,
+        activeToolCount: 0,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       })),
@@ -193,8 +197,12 @@ describe('ExtensionManagementHandlers', () => {
     const ctx = {
       reloadExtensions: vi.fn(async () => ({
         addedTools: 0,
+        autoActivatedTools: [],
         pluginCount: 1,
         workflowCount: 0,
+        toolCount: 0,
+        activeToolCount: 0,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       })),
@@ -287,8 +295,12 @@ describe('ExtensionManagementHandlers', () => {
     const ctx = {
       reloadExtensions: vi.fn(async () => ({
         addedTools: 0,
+        autoActivatedTools: [],
         pluginCount: 0,
         workflowCount: 1,
+        toolCount: 0,
+        activeToolCount: 0,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       })),
@@ -382,8 +394,12 @@ describe('ExtensionManagementHandlers', () => {
     const ctx = {
       reloadExtensions: vi.fn(async () => ({
         addedTools: 0,
+        autoActivatedTools: [],
         pluginCount: 0,
         workflowCount: 1,
+        toolCount: 0,
+        activeToolCount: 0,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       })),
@@ -470,8 +486,12 @@ describe('ExtensionManagementHandlers', () => {
     const ctx = {
       reloadExtensions: vi.fn(async () => ({
         addedTools: 0,
+        autoActivatedTools: [],
         pluginCount: 0,
         workflowCount: 1,
+        toolCount: 0,
+        activeToolCount: 0,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       })),
@@ -527,8 +547,12 @@ describe('ExtensionManagementHandlers', () => {
     const ctx = {
       reloadExtensions: vi.fn(async () => ({
         addedTools: 0,
+        autoActivatedTools: [],
         pluginCount: 0,
         workflowCount: 1,
+        toolCount: 0,
+        activeToolCount: 0,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       })),

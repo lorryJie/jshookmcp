@@ -70,8 +70,12 @@ describe('ExtensionManagementHandlers', () => {
     it('returns success', async () => {
       ctx.reloadExtensions.mockResolvedValue({
         addedTools: 1,
+        autoActivatedTools: ['tool-a'],
         pluginCount: 1,
         workflowCount: 0,
+        toolCount: 1,
+        activeToolCount: 1,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       });
@@ -383,7 +387,17 @@ describe('ExtensionManagementHandlers', () => {
         cb?.(null, { stdout: '', stderr: '' });
         return { pid: 0 } as unknown as child_process.ChildProcess;
       }) as typeof child_process.execFile);
-      ctx.reloadExtensions.mockResolvedValue({ addedTools: 1 });
+      ctx.reloadExtensions.mockResolvedValue({
+        addedTools: 1,
+        autoActivatedTools: ['tool-a'],
+        pluginCount: 0,
+        workflowCount: 0,
+        toolCount: 1,
+        activeToolCount: 1,
+        currentProfile: 'workflow',
+        errors: [],
+        warnings: [],
+      });
 
       const resPromise = handlers.handleInstallExtension('wf-test', '/custom/dir') as any;
       vi.runAllTimers();
@@ -468,7 +482,17 @@ describe('ExtensionManagementHandlers', () => {
         return '{}';
       }) as unknown as typeof fsPromises.readFile);
 
-      ctx.reloadExtensions.mockResolvedValue({ addedTools: 1 });
+      ctx.reloadExtensions.mockResolvedValue({
+        addedTools: 1,
+        autoActivatedTools: ['tool-a'],
+        pluginCount: 0,
+        workflowCount: 0,
+        toolCount: 1,
+        activeToolCount: 1,
+        currentProfile: 'workflow',
+        errors: [],
+        warnings: [],
+      });
       const resPromise = handlers.handleInstallExtension('pl-test') as any;
       vi.runAllTimers();
       const res = await resPromise;
@@ -525,7 +549,17 @@ describe('ExtensionManagementHandlers', () => {
         return '{}';
       }) as unknown as typeof fsPromises.readFile);
 
-      ctx.reloadExtensions.mockResolvedValue({ addedTools: 1 });
+      ctx.reloadExtensions.mockResolvedValue({
+        addedTools: 1,
+        autoActivatedTools: ['tool-a'],
+        pluginCount: 0,
+        workflowCount: 0,
+        toolCount: 1,
+        activeToolCount: 1,
+        currentProfile: 'workflow',
+        errors: [],
+        warnings: [],
+      });
       const resPromise = handlers.handleInstallExtension('pl-test') as any;
       vi.runAllTimers();
       await resPromise;
@@ -619,8 +653,12 @@ describe('ExtensionManagementHandlers', () => {
 
       ctx.reloadExtensions.mockResolvedValue({
         addedTools: 1,
+        autoActivatedTools: ['tool-a'],
         pluginCount: 0,
         workflowCount: 1,
+        toolCount: 1,
+        activeToolCount: 1,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       });
@@ -709,8 +747,12 @@ describe('ExtensionManagementHandlers', () => {
 
       ctx.reloadExtensions.mockResolvedValue({
         addedTools: 1,
+        autoActivatedTools: ['tool-a'],
         pluginCount: 0,
         workflowCount: 1,
+        toolCount: 1,
+        activeToolCount: 1,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       });

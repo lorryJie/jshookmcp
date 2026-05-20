@@ -2,6 +2,10 @@
  * Handlers for activate_tools and deactivate_tools meta-tools.
  */
 import { logger } from '@utils/logger';
+import {
+  registerExtensionToolRecord,
+  unregisterExtensionToolRecord,
+} from '@server/extensions/ExtensionManager.tools';
 import { asTextResponse } from '@server/domains/shared/response';
 import { getToolDomain } from '@server/ToolCatalog';
 import { createToolHandlerMap } from '@server/ToolHandlerMap';
@@ -55,26 +59,17 @@ export async function activateToolNames(
       continue;
     }
 
-    const registeredTool = ctx.registerSingleTool(toolDef);
-    ctx.activatedToolNames.add(name);
-    ctx.activatedRegisteredTools.set(name, registeredTool);
-
     const extensionRecord = ctx.extensionToolsByName.get(name);
     if (extensionRecord) {
-      extensionRecord.registeredTool = registeredTool;
-    }
-
-    const domain = getToolDomain(name) ?? ctx.extensionToolsByName.get(name)?.domain;
-    if (domain) {
-      ctx.enabledDomains.add(domain);
-    }
-
-    // Use stored handler for extension tools; built-in handler map for core tools.
-    if (extensionRecord?.handler) {
-      ctx.router.addHandlers({
-        [name]: extensionRecord.handler as Parameters<typeof ctx.router.addHandlers>[0][string],
-      });
+      registerExtensionToolRecord(ctx, extensionRecord, 'activate_tools');
     } else {
+      const registeredTool = ctx.registerSingleTool(toolDef);
+      ctx.activatedToolNames.add(name);
+      ctx.activatedRegisteredTools.set(name, registeredTool);
+      const domain = getToolDomain(name);
+      if (domain) {
+        ctx.enabledDomains.add(domain);
+      }
       const newToolNames = new Set([name]);
       const newHandlers = createToolHandlerMap(ctx.handlerDeps, newToolNames);
       ctx.router.addHandlers(newHandlers);
@@ -158,7 +153,7 @@ export async function handleDeactivateTools(
     }
 
     const registeredTool = ctx.activatedRegisteredTools.get(name);
-    if (registeredTool) {
+    if (registeredTool && !ctx.extensionToolsByName.has(name)) {
       try {
         registeredTool.remove();
       } catch (e) {
@@ -166,12 +161,17 @@ export async function handleDeactivateTools(
       }
     }
 
-    ctx.router.removeHandler(name);
-    ctx.activatedToolNames.delete(name);
-    ctx.activatedRegisteredTools.delete(name);
     const extensionRecord = ctx.extensionToolsByName.get(name);
     if (extensionRecord) {
-      extensionRecord.registeredTool = undefined;
+      unregisterExtensionToolRecord(ctx, extensionRecord, {
+        onRemoveError: (removeError) => {
+          logger.warn(`Failed to remove activated tool "${name}":`, removeError);
+        },
+      });
+    } else {
+      ctx.router.removeHandler(name);
+      ctx.activatedToolNames.delete(name);
+      ctx.activatedRegisteredTools.delete(name);
     }
     deactivated.push(name);
   }

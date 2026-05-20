@@ -33,6 +33,6 @@ Operations and maintenance domain covering cache hygiene, token budget, environm
 | `cleanup_artifacts` | Clean generated artifacts by age and size. |
 | `doctor_environment` | Run environment doctor: dependencies, bridges, platform limits. |
 | `list_extensions` | List all loaded plugins, workflows, and extension tools. |
-| `reload_extensions` | Reload plugins and workflows from configured directories. |
+| `reload_extensions` | Reload plugins and workflows from configured directories, and directly register extension tools visible in the current profile. |
 | `browse_extension_registry` | Browse the online extension registry for installable plugins and workflows. |
 | `install_extension` | Install an extension from the remote registry. |

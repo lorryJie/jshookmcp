@@ -19,7 +19,7 @@ import type { ExtensionBuilder, ToolArgs, PluginLifecycleContext } from '@jshook
 
 - `createExtension(id, version)` — entry point, returns a fluent `ExtensionBuilder`
 - `jsonResponse(data)` / `errorResponse(tool, error, extra?)` — tool response helpers
-- `ExtensionBuilder` — chainable builder with `.name()`, `.description()`, `.compatibleCore()`, `.profile()`, `.allowHost()`, `.allowTool()`, `.tool()`, `.onLoad()`, `.onValidate()`
+- `ExtensionBuilder` — chainable builder with `.compatibleCore()`, `.profile()`, `.allowHost()`, `.allowTool()`, `.tool()`, `.onLoad()`, `.onValidate()`
 
 ### Workflow development (fluent builder API)
 
@@ -66,8 +66,6 @@ import { createExtension, jsonResponse, errorResponse } from '@jshookmcp/extensi
 import { requestJson, assertLoopbackUrl } from '@jshookmcp/extension-sdk/bridges';
 
 export default createExtension('my-plugin', '1.0.0')
-  .name('My Plugin')
-  .description('A minimal plugin example.')
   .compatibleCore('>=0.1.0')
   .allowHost('127.0.0.1')
   .allowTool('my_tool')
@@ -85,6 +83,17 @@ export default createExtension('my-plugin', '1.0.0')
     ctx.setRuntimeData('loadedAt', new Date().toISOString());
   });
 ```
+
+Create a sibling `meta.yaml` for outward-facing metadata:
+
+```yaml
+name: My Plugin
+description: A minimal plugin example.
+author: your-team
+source_repo: https://github.com/your-org/my-plugin
+```
+
+Core treats `meta.yaml` as the only outward-facing metadata source. Keep `manifest.ts` focused on runtime declarations.
 
 ## Workflow Quick Start
 

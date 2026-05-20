@@ -5,6 +5,7 @@ import type {
   PluginLifecycleContext,
   PluginState,
 } from '@server/plugins/PluginContract';
+import type { ToolProfileId } from '@server/registry/contracts';
 import type { WorkflowContract } from '@server/workflows/WorkflowContract';
 
 export const INSTALLED_EXTENSION_METADATA_FILENAME = '.jshook-install.json';
@@ -30,8 +31,10 @@ export interface ExtensionToolRecord {
   source: string;
   tool: Tool;
   registeredTool?: RegisteredTool;
-  /** Minimum tier at which this tool is auto-registered during boost. */
-  boostTier?: string;
+  activatedAt?: string;
+  activationSource?: 'reload' | 'activate_tools' | 'activate_domain';
+  /** Profiles in which this tool should be auto-registered on reload. */
+  profiles?: readonly ToolProfileId[];
   /** Bound handler captured at load time for deferred registration. */
   handler?: Function;
 }
@@ -39,6 +42,7 @@ export interface ExtensionToolRecord {
 export interface ExtensionPluginRecord {
   id: string;
   name: string;
+  description?: string;
   source: string;
   author?: string;
   sourceRepo?: string;
@@ -77,6 +81,8 @@ export interface ExtensionListResult {
   pluginCount: number;
   workflowCount: number;
   toolCount: number;
+  activeToolCount: number;
+  currentProfile: ToolProfileId;
   lastReloadAt?: string;
   plugins: ExtensionPluginRecord[];
   workflows: ExtensionWorkflowRecord[];
@@ -84,11 +90,17 @@ export interface ExtensionListResult {
     name: string;
     domain: string;
     source: string;
+    profiles: readonly ToolProfileId[];
+    visibleInCurrentProfile: boolean;
+    active: boolean;
+    activationSource?: 'reload' | 'activate_tools' | 'activate_domain';
+    activatedAt?: string;
   }>;
 }
 
 export interface ExtensionReloadResult extends ExtensionListResult {
   addedTools: number;
+  autoActivatedTools: string[];
   removedTools: number;
   errors: string[];
   warnings: string[];

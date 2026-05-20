@@ -94,7 +94,7 @@ import {
 
 更新编译后，进入主程序管控环境发起注册探针：
 
-1. `extensions_reload`
-2. `extensions_list`
+1. `reload_extensions`
+2. `list_extensions`
 3. `list_extension_workflows`
 4. `run_extension_workflow` 驱动并激活执行图。
