@@ -24,7 +24,7 @@ interface BetterSqlite3Constructor {
   new (path: string): BetterSqlite3DatabaseLike;
 }
 
-const BETTER_SQLITE3_VERSION = '12.6.2';
+const BETTER_SQLITE3_VERSION = '12.10.0';
 const INSTALL_HINT = `pnpm add -O better-sqlite3@${BETTER_SQLITE3_VERSION}`;
 const REBUILD_HINT = 'npm rebuild better-sqlite3 --foreground-scripts';
 

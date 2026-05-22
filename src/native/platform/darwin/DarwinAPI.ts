@@ -148,7 +148,7 @@ export type DarwinRegionInfo = {
 
 // ── Library Loading ──
 
-let libSystem: koffi.IKoffiLib | null = null;
+let libSystem: koffi.LibraryHandle | null = null;
 let koffiAvailableDarwin: boolean | null = null;
 
 /**
@@ -178,7 +178,7 @@ export function isKoffiAvailableOnDarwin(): boolean {
 /**
  * Get or load libSystem.B.dylib (lazy)
  */
-function getLibSystem(): koffi.IKoffiLib {
+function getLibSystem(): koffi.LibraryHandle {
   if (!libSystem) {
     libSystem = koffi.load('/usr/lib/libSystem.B.dylib');
     logger.debug('Loaded libSystem.B.dylib via koffi');

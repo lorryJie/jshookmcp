@@ -66,7 +66,7 @@ jshookmcp
 │   └── better-sqlite3 ^12.2.0 (MEDIUM RISK - node-gyp)
 │       └── install: prebuild-install || node-gyp rebuild --release
 │
-├── koffi ^2.15.1 (REQUIRED)
+├── koffi ^3.0.1 (REQUIRED)
 │   └── install: node src/cnoke/cnoke.js -p . -d src/koffi --prebuild
 │   └── risk: LOW-MEDIUM (N-API based, more cross-version stable)
 │
@@ -84,8 +84,8 @@ jshookmcp
 | Package            | Version | Install Script                                                                | Native Style                                                 | Risk                    |
 | ------------------ | ------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------- |
 | **isolated-vm**    | 5.0.4   | `prebuild-install \|\| (node-gyp rebuild --release -j max && node-gyp clean)` | V8/Node-ABI binding (sensitive to Node major version)        | **HIGH**                |
-| **better-sqlite3** | 12.6.2  | `prebuild-install \|\| node-gyp rebuild --release`                            | node-gyp compilation or prebuilt binary                      | MEDIUM (optional chain) |
-| **koffi**          | 2.15.1  | `node src/cnoke/cnoke.js -p . -d src/koffi --prebuild`                        | N-API prebuilt (usually more cross-version stable)           | LOW-MEDIUM              |
+| **better-sqlite3** | 12.10.0 | `prebuild-install \|\| node-gyp rebuild --release`                            | node-gyp compilation or prebuilt binary                      | MEDIUM (optional chain) |
+| **koffi**          | 3.0.1   | `node src/cnoke/cnoke.js -p . -d src/koffi --prebuild`                        | N-API prebuilt (usually more cross-version stable)           | LOW-MEDIUM              |
 | **esbuild**        | 0.27.3  | `node install.js` (selects platform binary)                                   | Platform binary (usually doesn't depend on Node ABI changes) | LOW                     |
 
 ### Node ABI Version Impact
@@ -270,7 +270,7 @@ pnpm install --no-optional --reporter=append-only
 | root                  | `node >= 20.0.0`                                    | Runtime/install minimum threshold                                                                       |
 | eslint@10.0.2         | `node ^20.19.0 \|\| ^22.13.0 \|\| >=24`             | Dev tool; if user enables engine-strict or Node minor version too low, may cause install/script failure |
 | isolated-vm@5.0.4     | `node >= 18.0.0` (but actually affected by V8/ABI)  | Most sensitive during install: prebuild missing triggers node-gyp                                       |
-| better-sqlite3@12.6.2 | `node 20.x \|\| 22.x \|\| 23.x \|\| 24.x \|\| 25.x` | Main native risk point in optional chain                                                                |
+| better-sqlite3@12.10.0 | `node 20.x \|\| 22.x \|\| 23.x \|\| 24.x \|\| 25.x` | Main native risk point in optional chain                                                                |
 | camoufox-js@0.9.1     | `node >= 20`                                        | Optional dependency; only needed when using browser anti-detection capabilities                         |
 
 ---
@@ -295,8 +295,8 @@ pnpm install --no-optional --reporter=append-only
 
 - `package.json` (engines, dependencies, optionalDependencies, pnpm config)
 - `node_modules\.pnpm\isolated-vm@5.0.4\node_modules\isolated-vm\package.json` (install scripts)
-- `node_modules\.pnpm\better-sqlite3@12.6.2\node_modules\better-sqlite3\package.json` (install scripts)
-- `node_modules\.pnpm\koffi@2.15.1\node_modules\koffi\package.json` (install scripts)
+- `node_modules\.pnpm\better-sqlite3@12.10.0\node_modules\better-sqlite3\package.json` (install scripts)
+- `node_modules\.pnpm\koffi@3.0.1\node_modules\koffi\package.json` (install scripts)
 - `node_modules\.pnpm\esbuild@0.27.3\node_modules\esbuild\package.json` (install scripts)
 
 **Key Findings**:

@@ -178,9 +178,9 @@ export function writeContext(buf: Buffer, ctx: Partial<X64Context>): void {
 
 // ── Library Loading ──
 
-let kernel32Debug: koffi.IKoffiLib | null = null;
+let kernel32Debug: koffi.LibraryHandle | null = null;
 
-function getKernel32(): koffi.IKoffiLib {
+function getKernel32(): koffi.LibraryHandle {
   if (!kernel32Debug) {
     kernel32Debug = koffi.load('kernel32.dll');
     logger.debug('Loaded kernel32.dll for debug APIs');
