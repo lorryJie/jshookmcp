@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { resolve as resolvePath } from 'node:path';
 
 const state = vi.hoisted(() => {
@@ -47,10 +48,42 @@ function createChildProcessMock() {
   return child;
 }
 
+function isAbsoluteTempCandidate(candidate: string): boolean {
+  return process.platform === 'win32'
+    ? /^[A-Za-z]:[\\/]/.test(candidate) || candidate.startsWith('\\\\')
+    : candidate.startsWith('/');
+}
+
 async function createIsolatedTempDir(prefix: string) {
-  const root = join(process.cwd(), '.tmp_mcp_artifacts', 'vitest-temp');
-  await mkdir(root, { recursive: true });
-  return mkdtemp(join(root, prefix));
+  const candidates = [
+    process.env.RUNNER_TEMP,
+    process.env.TMPDIR,
+    process.env.TEMP,
+    process.env.TMP,
+    tmpdir(),
+    '/tmp',
+    '/var/tmp',
+  ];
+  const seen = new Set<string>();
+
+  for (const candidate of candidates) {
+    const root = candidate?.trim();
+    if (!root || seen.has(root) || !isAbsoluteTempCandidate(root)) {
+      continue;
+    }
+
+    seen.add(root);
+
+    try {
+      const tempRoot = join(root, 'jshookmcp-vitest');
+      await mkdir(tempRoot, { recursive: true });
+      return await mkdtemp(join(tempRoot, prefix));
+    } catch {
+      continue;
+    }
+  }
+
+  throw new Error(`Unable to create temp directory for prefix '${prefix}'`);
 }
 
 describe('ExternalToolRunner', () => {
