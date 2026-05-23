@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { resolve as resolvePath } from 'node:path';
 
 const state = vi.hoisted(() => {
@@ -46,6 +45,12 @@ function createChildProcessMock() {
   };
   child.kill = vi.fn();
   return child;
+}
+
+async function createIsolatedTempDir(prefix: string) {
+  const root = join(process.cwd(), '.tmp_mcp_artifacts', 'vitest-temp');
+  await mkdir(root, { recursive: true });
+  return mkdtemp(join(root, prefix));
 }
 
 describe('ExternalToolRunner', () => {
@@ -890,7 +895,7 @@ describe('ExternalToolRunner', () => {
       getCachedProbe: vi.fn().mockReturnValue({ available: true }),
     } as any;
     const runner = new ExternalToolRunner(registry);
-    const dir = await mkdtemp(join(tmpdir(), 'external-runner-test-'));
+    const dir = await createIsolatedTempDir('external-runner-test-');
     const outputPath = join(dir, 'artifact.txt');
     await writeFile(outputPath, '');
 
@@ -922,7 +927,7 @@ describe('ExternalToolRunner', () => {
       getCachedProbe: vi.fn().mockReturnValue({ available: true }),
     } as any;
     const runner = new ExternalToolRunner(registry);
-    const dir = await mkdtemp(join(tmpdir(), 'external-runner-dir-test-'));
+    const dir = await createIsolatedTempDir('external-runner-dir-test-');
     const outputDir = join(dir, 'out');
     await mkdir(outputDir, { recursive: true });
 
