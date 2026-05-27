@@ -5,10 +5,9 @@ export const dartInspectorTools: Tool[] = [
   tool('dart_strings_extract', (t) =>
     t
       .desc(
-        'Extract and classify printable strings from a Dart AOT libapp.so (or any binary). ' +
-          'Streams the file in chunks, scans ASCII and/or UTF-16LE runs, merges offsets, and ' +
-          'categorizes hits (urls, paths, classNames, packageRefs, cryptoKeywords, plus any ' +
-          'customRules). Includes ReDoS guards for user-supplied regex rules.',
+        'Stream-extract ASCII/UTF-16LE strings from a Dart AOT libapp.so and ' +
+          'classify them (urls, paths, classNames, packageRefs, cryptoKeywords, ' +
+          'plus customRules). ReDoS-guarded.',
       )
       .string('filePath', 'Absolute path to the libapp.so (or arbitrary binary) to extract from')
       .number('minLength', 'Minimum string length to emit', { default: 4, minimum: 2, maximum: 64 })
@@ -83,10 +82,8 @@ export const dartInspectorTools: Tool[] = [
   tool('dart_smi_scan', (t) =>
     t
       .desc(
-        'Recover Dart Small Integer (Smi) constants from a libapp.so binary. ' +
-          'The Dart VM tags every word-sized value with the low bit (0=Smi, 1=heap pointer) ' +
-          'and stores integer literals as `value << 1`, so raw string/byte scans miss them. ' +
-          'This tool reads aligned little-endian words and emits the decoded values.',
+        'Recover Dart Small Integer (Smi) constants from a libapp.so by reading ' +
+          'aligned little-endian words and stripping the heap-pointer tag bit.',
       )
       .string('filePath', 'Absolute path to the libapp.so (or arbitrary binary) to scan')
       .enum('width', ['4', '8'], 'Word width in bytes (4 for ARM32, 8 for ARM64)', { default: '8' })
@@ -106,6 +103,39 @@ export const dartInspectorTools: Tool[] = [
         'Restrict scanning to a byte range',
       )
       .required('filePath')
+      .query(),
+  ),
+  tool('dart_symbolize', (t) =>
+    t
+      .desc(
+        'Resolve obfuscated Dart identifiers using a developer-supplied ' +
+          'Flutter --save-obfuscation-map JSON (flat, pairs, or object shape).',
+      )
+      .string(
+        'obfuscationMapFile',
+        'Absolute path to the obfuscation-map.json emitted by `flutter build ... ' +
+          '--extra-gen-snapshot-options=--save-obfuscation-map=FILE`',
+      )
+      .array(
+        'obfuscatedNames',
+        { type: 'string', description: 'An obfuscated (or original, in reverse mode) identifier' },
+        'List of identifiers to resolve against the map',
+      )
+      .enum(
+        'format',
+        ['auto', 'flat', 'pairs', 'object'],
+        'Force a specific parser; auto sniffs the JSON shape',
+        { default: 'auto' },
+      )
+      .enum(
+        'mode',
+        ['forward', 'reverse'],
+        'Lookup direction (forward: obfuscated→original, reverse: original→obfuscated)',
+        { default: 'forward' },
+      )
+      .number('maxMapBytes', 'Cap on map file size in bytes', { default: 16 * 1024 * 1024 })
+      .number('maxLookups', 'Cap on number of lookups attempted (extras go to unresolved)')
+      .required('obfuscationMapFile', 'obfuscatedNames')
       .query(),
   ),
 ];
