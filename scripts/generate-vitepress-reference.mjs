@@ -457,6 +457,22 @@ const META = {
     enScenarios: ['Flutter app reversing', 'libapp.so string audit', 'Crypto keyword location'],
     enCombos: ['dart-inspector + binary-instrument', 'dart-inspector + adb-bridge'],
   },
+  'apk-packer': {
+    zhTitle: 'APK Packer',
+    zhSummary:
+      '通过匹配 `lib/<abi>/lib*.so` 文件名识别 Android APK 加固层；框架不内置签名表，调用方通过 customSignatures 提供（ReDoS 防护正则编译）。不脱壳、不动态执行、不与加固载荷交互。',
+    zhScenarios: ['Android 加固层识别', '多层加固层级分析', '自定义指纹匹配'],
+    zhCombos: ['apk-packer + binary-instrument', 'apk-packer + adb-bridge'],
+    enTitle: 'APK Packer',
+    enSummary:
+      'Identify Android APK packer layers by matching `lib/<abi>/lib*.so` filenames against caller-supplied customSignatures (ReDoS-guarded regex compilation). The framework ships no built-in signature table. No unpacking, no dynamic execution, no payload interaction.',
+    enScenarios: [
+      'Android packer-layer identification',
+      'Multi-layer protection analysis',
+      'Custom fingerprint matching',
+    ],
+    enCombos: ['apk-packer + binary-instrument', 'apk-packer + adb-bridge'],
+  },
   'extension-registry': {
     zhTitle: 'Extension Registry',
     zhSummary: '扩展注册域，管理和发现社区扩展。',
