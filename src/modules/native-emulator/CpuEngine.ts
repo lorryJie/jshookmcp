@@ -22,6 +22,13 @@
  * segments at their virtual addresses, ready to execute from the ELF entry.
  */
 import { ElfLoader } from './ElfLoader';
+import {
+  R_AARCH64_ABS64,
+  R_AARCH64_GLOB_DAT,
+  R_AARCH64_JUMP_SLOT,
+  R_AARCH64_RELATIVE,
+} from './ElfLoader';
+import type { BionicLibrary } from './bionic';
 
 const EM_AARCH64 = 183;
 const MASK64 = (1n << 64n) - 1n;
@@ -31,6 +38,8 @@ const MAX_STEPS = 1_000_000; // Runaway guard for the M0 linear executor.
 const RETURN_SENTINEL = 0; // LR value that marks "return out of callSymbol".
 const STACK_BASE = 0x7fff_0000; // Guest stack region base (grows down from the top).
 const STACK_SIZE = 0x10000; // 64 KiB default emulated stack.
+/** Base of the lazily-grown region holding one host stub per resolved import. */
+const IMPORT_STUB_BASE = 0x6800_0000;
 
 interface MappedRegion {
   base: number;
@@ -109,6 +118,8 @@ export class CpuEngine {
   private readonly syscalls = new Map<number, SyscallHandler>();
   /** Top of the lazily-mapped guest stack (0 = not yet allocated). */
   private stackTop = 0;
+  /** Next free address in the import-stub region (bumped per resolved import). */
+  private importStubBump = IMPORT_STUB_BASE;
   /** Instruction observers (trace/breakpoint). Empty ⇒ hot loop pays nothing. */
   private readonly instructionHooks: InstructionHook[] = [];
 
@@ -130,9 +141,13 @@ export class CpuEngine {
 
   /**
    * Load an ELF64 AArch64 shared object: map every PT_LOAD segment at its
-   * virtual address (with the zero-filled .bss tail) and return the entry point.
+   * virtual address (with the zero-filled .bss tail), apply dynamic relocations,
+   * and return the entry point. When a `bionic` library is supplied, imported
+   * libc symbols (resolved via R_AARCH64_JUMP_SLOT / GLOB_DAT) are auto-wired to
+   * host stubs and their GOT slots patched — so a real PIC `.so` runs without the
+   * caller hand-routing each import.
    */
-  loadElf(bytes: Uint8Array): { entry: number } {
+  loadElf(bytes: Uint8Array, bionic?: BionicLibrary): { entry: number } {
     const elf = new ElfLoader(bytes);
     if (elf.machine !== EM_AARCH64) {
       throw new Error(`Unsupported ELF machine 0x${elf.machine.toString(16)} (expected AArch64)`);
@@ -141,7 +156,56 @@ export class CpuEngine {
       this.regions.push({ base: seg.vaddr, size: seg.data.length, data: seg.data });
     }
     this.symbols = elf.exportedSymbols();
+    this.applyRelocations(elf, bionic);
     return { entry: elf.entry };
+  }
+
+  /**
+   * Apply the object's dynamic relocations to the mapped image. RELATIVE adds the
+   * load bias (zero here, since segments map at their link-time vaddr). ABS64 and
+   * GLOB_DAT write a resolved symbol value (this `.so`'s own export, or an
+   * auto-wired import stub) into the target slot. JUMP_SLOT is the PLT/GOT entry
+   * a stub-trampoline reads, so it too points at the import stub.
+   */
+  private applyRelocations(elf: ElfLoader, bionic?: BionicLibrary): void {
+    for (const rel of elf.relocations()) {
+      switch (rel.type) {
+        case R_AARCH64_RELATIVE:
+          // *(offset) = bias + addend; bias is 0 (mapped at link vaddr).
+          this.storeValue(rel.offset, 8, BigInt(rel.addend));
+          break;
+        case R_AARCH64_ABS64:
+        case R_AARCH64_GLOB_DAT:
+        case R_AARCH64_JUMP_SLOT: {
+          const resolved = this.resolveRelocSymbol(rel.symbolName, rel.symbolValue, bionic);
+          this.storeValue(rel.offset, 8, BigInt(resolved + rel.addend));
+          break;
+        }
+        default:
+          // Unknown reloc types are skipped rather than fatal: many objects carry
+          // TLS/IRELATIVE entries the compute path never touches. A missing fixup
+          // surfaces later as a loud unmapped-access throw if it actually matters.
+          break;
+      }
+    }
+  }
+
+  /**
+   * Resolve a relocation's target address: prefer this object's own export, then
+   * an auto-wired bionic import (allocating a one-off host stub the first time a
+   * name is seen). Falls back to the symbol's own value (0 for undefined imports
+   * with no bionic entry), so calling an unresolved import faults loudly.
+   */
+  private resolveRelocSymbol(name: string, symbolValue: number, bionic?: BionicLibrary): number {
+    if (name && this.symbols.has(name)) return this.symbols.get(name)!;
+    if (name && bionic?.has(name)) {
+      const fn = bionic.get(name)!;
+      const stubAddr = this.importStubBump;
+      this.importStubBump += 8;
+      this.registerHostFunction(stubAddr, fn);
+      return stubAddr;
+    }
+    return symbolValue;
   }
 
   /**

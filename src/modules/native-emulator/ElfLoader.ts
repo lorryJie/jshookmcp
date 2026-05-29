@@ -18,12 +18,45 @@ const ELF_MAGIC = [0x7f, 0x45, 0x4c, 0x46]; // \x7f E L F
 const ELFCLASS64 = 2;
 const ELFDATA2LSB = 1;
 const PT_LOAD = 1;
+const PT_DYNAMIC = 2;
 const PF_X = 0b001;
 const PF_W = 0b010;
 const PF_R = 0b100;
 const EHDR_SIZE = 64;
 const SHT_DYNSYM = 11;
 const SYM_SIZE = 24; // sizeof(Elf64_Sym)
+const RELA_SIZE = 24; // sizeof(Elf64_Rela): r_offset(8) r_info(8) r_addend(8)
+
+// Dynamic-section tags (Elf64_Dyn d_tag values) the loader consumes.
+const DT_NULL = 0;
+const DT_STRTAB = 5;
+const DT_SYMTAB = 6;
+const DT_RELA = 7;
+const DT_RELASZ = 8;
+const DT_STRSZ = 10;
+const DT_SYMENT = 11;
+const DT_JMPREL = 23;
+const DT_PLTRELSZ = 2;
+
+// AArch64 relocation types (r_info low 32 bits) the loader applies.
+export const R_AARCH64_ABS64 = 257;
+export const R_AARCH64_GLOB_DAT = 1025;
+export const R_AARCH64_JUMP_SLOT = 1026;
+export const R_AARCH64_RELATIVE = 1027;
+
+/** One dynamic relocation, resolved against the dynamic symbol table when needed. */
+export interface ElfRelocation {
+  /** Virtual address the relocation patches (r_offset). */
+  offset: number;
+  /** AArch64 relocation type (R_AARCH64_*). */
+  type: number;
+  /** r_addend. */
+  addend: number;
+  /** Referenced symbol name (empty for symbol-less relocs like RELATIVE). */
+  symbolName: string;
+  /** Referenced symbol's value/vaddr (0 when undefined/imported). */
+  symbolValue: number;
+}
 
 /** A loadable (PT_LOAD) segment with its memory image (filesz bytes + zeroed .bss tail). */
 export interface LoadableSegment {
@@ -121,7 +154,9 @@ export class ElfLoader {
   /**
    * Resolve exported dynamic symbols (name → virtual address) from .dynsym,
    * using the .dynstr table identified by the SHT_DYNSYM section's sh_link.
-   * Returns an empty map when the object has no dynamic symbol table.
+   * Falls back to PT_DYNAMIC parsing when section headers are absent (real
+   * Android `.so` are frequently stripped of them). Returns an empty map when
+   * the object has neither.
    */
   exportedSymbols(): Map<string, number> {
     const result = new Map<string, number>();
@@ -136,7 +171,7 @@ export class ElfLoader {
         break;
       }
     }
-    if (dynsymSh < 0) return result;
+    if (dynsymSh < 0) return this.exportedSymbolsFromDynamic();
 
     const dynsymOffset = Number(this.view.getBigUint64(dynsymSh + 0x18, le));
     const dynsymSize = Number(this.view.getBigUint64(dynsymSh + 0x20, le));
@@ -153,11 +188,174 @@ export class ElfLoader {
       const sym = dynsymOffset + i * SYM_SIZE;
       const nameOff = this.view.getUint32(sym + 0x00, le);
       const value = Number(this.view.getBigUint64(sym + 0x08, le));
+      const shndx = this.view.getUint16(sym + 0x06, le);
       const name = this.readCString(strOffset, strSize, nameOff);
-      if (name) result.set(name, value);
+      // Defined symbols only (shndx != SHN_UNDEF=0): imports have value 0 and no
+      // home section, and would otherwise shadow a real export at address 0.
+      if (name && shndx !== 0) result.set(name, value);
     }
 
     return result;
+  }
+
+  /**
+   * Resolve exported symbols via PT_DYNAMIC (DT_SYMTAB/DT_STRTAB), the path real
+   * stripped `.so` need since they carry no section header table. Defined
+   * symbols (st_shndx != SHN_UNDEF) map name → vaddr.
+   */
+  private exportedSymbolsFromDynamic(): Map<string, number> {
+    const result = new Map<string, number>();
+    const dyn = this.dynamicInfo();
+    if (!dyn || dyn.symtab === 0 || dyn.strtab === 0) return result;
+    const le = this.isLittleEndian;
+    const symOff = this.vaddrToOffset(dyn.symtab);
+    const strOff = this.vaddrToOffset(dyn.strtab);
+    if (symOff < 0 || strOff < 0) return result;
+    // DT_SYMTAB has no count; walk until the string-table offset (a common
+    // layout where .dynstr immediately follows .dynsym) or the file end.
+    const symEnd = strOff > symOff ? strOff : this.bytes.length;
+    const count = Math.floor((symEnd - symOff) / SYM_SIZE);
+    for (let i = 1; i < count; i++) {
+      const sym = symOff + i * SYM_SIZE;
+      if (sym + SYM_SIZE > this.bytes.length) break;
+      const nameOff = this.view.getUint32(sym + 0x00, le);
+      const shndx = this.view.getUint16(sym + 0x06, le);
+      const value = Number(this.view.getBigUint64(sym + 0x08, le));
+      const name = this.readCString(strOff, dyn.strsz || this.bytes.length - strOff, nameOff);
+      if (name && shndx !== 0) result.set(name, value);
+    }
+    return result;
+  }
+
+  /**
+   * Parse all dynamic relocations (.rela.dyn + .rela.plt) into a flat list with
+   * symbol names/values resolved. Drives GOT/PLT fixups and bionic auto-wiring
+   * in CpuEngine.loadElf. Returns an empty list when the object is not dynamic.
+   */
+  relocations(): ElfRelocation[] {
+    const dyn = this.dynamicInfo();
+    if (!dyn) return [];
+    const le = this.isLittleEndian;
+    const out: ElfRelocation[] = [];
+    const symOff = dyn.symtab ? this.vaddrToOffset(dyn.symtab) : -1;
+    const strOff = dyn.strtab ? this.vaddrToOffset(dyn.strtab) : -1;
+
+    const parseTable = (relaVaddr: number, size: number): void => {
+      if (relaVaddr === 0 || size === 0) return;
+      const base = this.vaddrToOffset(relaVaddr);
+      if (base < 0) return;
+      const n = Math.floor(size / RELA_SIZE);
+      for (let i = 0; i < n; i++) {
+        const rec = base + i * RELA_SIZE;
+        if (rec + RELA_SIZE > this.bytes.length) break;
+        const offset = Number(this.view.getBigUint64(rec + 0x00, le));
+        const info = this.view.getBigUint64(rec + 0x08, le);
+        const addend = Number(BigInt.asIntN(64, this.view.getBigUint64(rec + 0x10, le)));
+        const type = Number(info & 0xffffffffn);
+        const symIndex = Number(info >> 32n);
+        let symbolName = '';
+        let symbolValue = 0;
+        if (symIndex > 0 && symOff >= 0) {
+          const sym = symOff + symIndex * SYM_SIZE;
+          if (sym + SYM_SIZE <= this.bytes.length) {
+            const nameOff = this.view.getUint32(sym + 0x00, le);
+            symbolValue = Number(this.view.getBigUint64(sym + 0x08, le));
+            if (strOff >= 0) {
+              symbolName = this.readCString(
+                strOff,
+                dyn.strsz || this.bytes.length - strOff,
+                nameOff,
+              );
+            }
+          }
+        }
+        out.push({ offset, type, addend, symbolName, symbolValue });
+      }
+    };
+
+    parseTable(dyn.rela, dyn.relasz);
+    parseTable(dyn.jmprel, dyn.pltrelsz);
+    return out;
+  }
+
+  /**
+   * Walk PT_DYNAMIC and collect the d_tag/d_val pairs the loader needs. Returns
+   * null when the object has no dynamic segment (a static or relocatable file).
+   */
+  private dynamicInfo(): {
+    symtab: number;
+    strtab: number;
+    strsz: number;
+    rela: number;
+    relasz: number;
+    jmprel: number;
+    pltrelsz: number;
+  } | null {
+    const le = this.isLittleEndian;
+    let dynOff = -1;
+    let dynSize = 0;
+    for (let i = 0; i < this.phnum; i++) {
+      const ph = this.phoff + i * this.phentsize;
+      if (this.view.getUint32(ph + 0x00, le) === PT_DYNAMIC) {
+        dynOff = Number(this.view.getBigUint64(ph + 0x08, le)); // p_offset
+        dynSize = Number(this.view.getBigUint64(ph + 0x20, le)); // p_filesz
+        break;
+      }
+    }
+    if (dynOff < 0) return null;
+    const info = { symtab: 0, strtab: 0, strsz: 0, rela: 0, relasz: 0, jmprel: 0, pltrelsz: 0 };
+    const entries = Math.floor(dynSize / 16); // Elf64_Dyn = { i64 tag; u64 val }
+    for (let i = 0; i < entries; i++) {
+      const e = dynOff + i * 16;
+      const tag = Number(BigInt.asIntN(64, this.view.getBigUint64(e + 0x00, le)));
+      const val = Number(this.view.getBigUint64(e + 0x08, le));
+      if (tag === DT_NULL) break;
+      switch (tag) {
+        case DT_SYMTAB:
+          info.symtab = val;
+          break;
+        case DT_STRTAB:
+          info.strtab = val;
+          break;
+        case DT_STRSZ:
+          info.strsz = val;
+          break;
+        case DT_RELA:
+          info.rela = val;
+          break;
+        case DT_RELASZ:
+          info.relasz = val;
+          break;
+        case DT_JMPREL:
+          info.jmprel = val;
+          break;
+        case DT_PLTRELSZ:
+          info.pltrelsz = val;
+          break;
+        case DT_SYMENT:
+        default:
+          break;
+      }
+    }
+    return info;
+  }
+
+  /**
+   * Translate a virtual address to a file offset using the PT_LOAD segments.
+   * Dynamic-section pointers (DT_SYMTAB/STRTAB/RELA, r_offset) are vaddrs; we
+   * read them out of the on-disk image. Returns -1 when unmapped.
+   */
+  private vaddrToOffset(vaddr: number): number {
+    const le = this.isLittleEndian;
+    for (let i = 0; i < this.phnum; i++) {
+      const ph = this.phoff + i * this.phentsize;
+      if (this.view.getUint32(ph + 0x00, le) !== PT_LOAD) continue;
+      const off = Number(this.view.getBigUint64(ph + 0x08, le));
+      const va = Number(this.view.getBigUint64(ph + 0x10, le));
+      const filesz = Number(this.view.getBigUint64(ph + 0x20, le));
+      if (vaddr >= va && vaddr < va + filesz) return off + (vaddr - va);
+    }
+    return -1;
   }
 
   /** Read a NUL-terminated string from a string table at the given index. */

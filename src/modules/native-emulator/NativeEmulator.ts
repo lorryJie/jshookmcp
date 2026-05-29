@@ -24,7 +24,12 @@
  */
 import { CpuEngine } from './CpuEngine';
 import { JniEnvironment, type JavaMethodImpl } from './jni';
-import { installBionicStubs, type BionicStubAddresses } from './bionic';
+import {
+  installBionicStubs,
+  createBionicLibrary,
+  type BionicStubAddresses,
+  type BionicLibrary,
+} from './bionic';
 import { installAndroidSyscalls, type AndroidSyscallOptions } from './syscalls';
 
 export interface NativeEmulatorOptions {
@@ -44,10 +49,13 @@ export interface NativeEmulatorOptions {
 export class NativeEmulator {
   readonly engine: CpuEngine;
   readonly jni: JniEnvironment;
+  /** Default bionic libc, auto-wired into loaded `.so` via relocations. */
+  private readonly bionic: BionicLibrary;
 
   constructor(options: NativeEmulatorOptions = {}) {
     this.engine = new CpuEngine();
     this.jni = new JniEnvironment(this.engine);
+    this.bionic = createBionicLibrary(this.engine);
     if (options.syscalls !== false) {
       installAndroidSyscalls(this.engine, options.syscalls ?? {});
     }
@@ -58,9 +66,13 @@ export class NativeEmulator {
     return this.engine.isAvailable();
   }
 
-  /** Load an ELF64 AArch64 shared object's bytes and return its entry point. */
+  /**
+   * Load an ELF64 AArch64 shared object's bytes and return its entry point.
+   * Dynamic relocations are applied and imported libc symbols auto-wired to the
+   * bundled bionic stubs, so a real PIC `.so` is callable without manual setup.
+   */
   loadLibrary(bytes: Uint8Array): { entry: number } {
-    return this.engine.loadElf(bytes);
+    return this.engine.loadElf(bytes, this.bionic);
   }
 
   /**

@@ -27,6 +27,130 @@ const HEAP_BASE = 0x100000;
 /** Allocation granularity (bytes); keeps returned pointers naturally aligned. */
 const HEAP_ALIGN = 16;
 
+/**
+ * A bionic libc implementation keyed by symbol name, for relocation-driven
+ * auto-wiring: when CpuEngine.loadElf resolves an import (R_AARCH64_JUMP_SLOT /
+ * GLOB_DAT) whose name is in here, it points the GOT slot at a stub running the
+ * matching HostFunction. Stateful entries (malloc/free) capture a shared heap.
+ */
+export type BionicLibrary = Map<string, (ctx: HostContext) => bigint | number | void>;
+
+/**
+ * Build the default bionic libc as a name→HostFunction map. A single bump heap
+ * is shared across malloc/calloc/realloc; free is a no-op (the bump allocator
+ * never reclaims). The map is the source of truth both for auto-wiring and for
+ * the address-keyed installBionicStubs below.
+ */
+export function createBionicLibrary(engine: CpuEngine): BionicLibrary {
+  const lib: BionicLibrary = new Map();
+  let bump = HEAP_BASE;
+  // Track allocation sizes so realloc can copy the old contents forward.
+  const sizes = new Map<number, number>();
+
+  const alloc = (size: number): number => {
+    const rounded = Math.max(HEAP_ALIGN, (size + HEAP_ALIGN - 1) & ~(HEAP_ALIGN - 1));
+    const ptr = bump;
+    engine.mapMemory(ptr, rounded);
+    bump += rounded;
+    sizes.set(ptr, size);
+    return ptr;
+  };
+
+  lib.set('strlen', (ctx) => {
+    const start = Number(ctx.x(0));
+    let len = 0;
+    while (ctx.read(start + len, 1)[0] !== 0) len++;
+    return BigInt(len);
+  });
+  lib.set('memcpy', (ctx) => {
+    const dst = Number(ctx.x(0));
+    ctx.write(dst, ctx.read(Number(ctx.x(1)), Number(ctx.x(2))));
+    return ctx.x(0);
+  });
+  lib.set('memmove', (ctx) => {
+    // Copy via an intermediate buffer so overlapping ranges stay correct.
+    const dst = Number(ctx.x(0));
+    const copy = Uint8Array.from(ctx.read(Number(ctx.x(1)), Number(ctx.x(2))));
+    ctx.write(dst, copy);
+    return ctx.x(0);
+  });
+  lib.set('memset', (ctx) => {
+    const buf = Number(ctx.x(0));
+    const value = Number(ctx.x(1) & 0xffn);
+    const n = Number(ctx.x(2));
+    ctx.write(buf, new Uint8Array(n).fill(value));
+    return ctx.x(0);
+  });
+  lib.set('memcmp', (ctx) => {
+    const a = ctx.read(Number(ctx.x(0)), Number(ctx.x(2)));
+    const b = ctx.read(Number(ctx.x(1)), Number(ctx.x(2)));
+    for (let i = 0; i < a.length; i++) {
+      const d = (a[i] ?? 0) - (b[i] ?? 0);
+      if (d !== 0) return BigInt(d < 0 ? -1 : 1);
+    }
+    return 0n;
+  });
+  lib.set('strcmp', (ctx) => {
+    let p = Number(ctx.x(0));
+    let q = Number(ctx.x(1));
+    for (;;) {
+      const a = ctx.read(p++, 1)[0] ?? 0;
+      const b = ctx.read(q++, 1)[0] ?? 0;
+      if (a !== b) return BigInt(a < b ? -1 : 1);
+      if (a === 0) return 0n;
+    }
+  });
+  lib.set('strncmp', (ctx) => {
+    let p = Number(ctx.x(0));
+    let q = Number(ctx.x(1));
+    const n = Number(ctx.x(2));
+    for (let i = 0; i < n; i++) {
+      const a = ctx.read(p++, 1)[0] ?? 0;
+      const b = ctx.read(q++, 1)[0] ?? 0;
+      if (a !== b) return BigInt(a < b ? -1 : 1);
+      if (a === 0) break;
+    }
+    return 0n;
+  });
+  lib.set('strcpy', (ctx) => {
+    const dst = Number(ctx.x(0));
+    let src = Number(ctx.x(1));
+    let i = 0;
+    for (;;) {
+      const b = ctx.read(src++, 1)[0] ?? 0;
+      ctx.write(dst + i, Uint8Array.of(b));
+      i++;
+      if (b === 0) break;
+    }
+    return ctx.x(0);
+  });
+  lib.set('malloc', (ctx) => BigInt(alloc(Number(ctx.x(0)))));
+  lib.set('calloc', (ctx) => {
+    const n = Number(ctx.x(0)) * Number(ctx.x(1));
+    const ptr = alloc(n);
+    ctx.write(ptr, new Uint8Array(n)); // calloc zeroes
+    return BigInt(ptr);
+  });
+  lib.set('realloc', (ctx) => {
+    const old = Number(ctx.x(0));
+    const size = Number(ctx.x(1));
+    if (old === 0) return BigInt(alloc(size));
+    const ptr = alloc(size);
+    const oldSize = sizes.get(old) ?? 0;
+    if (oldSize > 0) ctx.write(ptr, ctx.read(old, Math.min(oldSize, size)));
+    return BigInt(ptr);
+  });
+  lib.set('free', () => undefined);
+  lib.set('__stack_chk_fail', () => {
+    throw new Error('bionic: __stack_chk_fail (stack canary corrupted in emulated code)');
+  });
+  lib.set('abort', () => {
+    throw new Error('bionic: abort() called by emulated code');
+  });
+
+  return lib;
+}
+
 export function installBionicStubs(engine: CpuEngine, addrs: BionicStubAddresses): void {
   if (addrs.strlen !== undefined) {
     engine.registerHostFunction(addrs.strlen, (ctx: HostContext) => {
