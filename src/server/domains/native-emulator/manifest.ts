@@ -23,6 +23,7 @@ const registrations = defineMethodRegistrations<H, (typeof nativeEmulatorTools)[
     { tool: 'nemu_call_symbol', method: 'handleCallSymbol' },
     { tool: 'nemu_call_jni_export', method: 'handleCallJniExport' },
     { tool: 'nemu_setup_java_mock', method: 'handleSetupJavaMock' },
+    { tool: 'nemu_setup_java_field', method: 'handleSetupJavaField' },
     { tool: 'nemu_new_byte_array', method: 'handleNewByteArray' },
     { tool: 'nemu_read_byte_array', method: 'handleReadByteArray' },
     { tool: 'nemu_trace', method: 'handleTrace' },

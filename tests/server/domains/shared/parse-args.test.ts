@@ -7,6 +7,7 @@ import {
   argStringRequired,
   argNumberRequired,
   argStringArray,
+  argNumberArray,
   argObject,
 } from '@server/domains/shared/parse-args';
 
@@ -94,6 +95,14 @@ describe('parse-args', () => {
       expect(argStringArray({ key: ['a', 1, 'b'] }, 'key')).toEqual(['a', 'b']);
       expect(argStringArray({ key: 'not array' }, 'key')).toEqual([]);
       expect(argStringArray({}, 'key')).toEqual([]);
+    });
+
+    it('argNumberArray extracts finite numbers, dropping the rest', async () => {
+      expect(argNumberArray({ key: [1, 2, 3] }, 'key')).toEqual([1, 2, 3]);
+      expect(argNumberArray({ key: [1, 'x', 2, null] }, 'key')).toEqual([1, 2]);
+      expect(argNumberArray({ key: [1, NaN, Infinity, 2] }, 'key')).toEqual([1, 2]);
+      expect(argNumberArray({ key: 'not array' }, 'key')).toEqual([]);
+      expect(argNumberArray({}, 'key')).toEqual([]);
     });
 
     it('argObject extracts plain objects', async () => {

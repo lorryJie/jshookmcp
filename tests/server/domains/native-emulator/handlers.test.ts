@@ -201,6 +201,43 @@ describe('NativeEmulatorHandlers — happy path', () => {
     expect(res.returns).toBe('int');
   });
 
+  it('registers a declarative Java field (int / string / bytes)', async () => {
+    const sessionId = await freshSession();
+    const asInt = payload(
+      await handlers.handleSetupJavaField({
+        sessionId,
+        className: 'com/app/Config',
+        fieldName: 'magic',
+        signature: 'I',
+        valueInt: 1337,
+      }),
+    );
+    expect(asInt.success).toBe(true);
+    expect(asInt.kind).toBe('int');
+
+    const asString = payload(
+      await handlers.handleSetupJavaField({
+        sessionId,
+        className: 'com/app/Config',
+        fieldName: 'salt',
+        signature: 'Ljava/lang/String;',
+        valueString: 'pepper',
+      }),
+    );
+    expect(asString.kind).toBe('string');
+
+    const asBytes = payload(
+      await handlers.handleSetupJavaField({
+        sessionId,
+        className: 'com/app/Config',
+        fieldName: 'key',
+        signature: '[B',
+        valueBytes: Buffer.from([1, 2, 3]).toString('base64'),
+      }),
+    );
+    expect(asBytes.kind).toBe('bytes');
+  });
+
   it('traces an exported symbol instruction-by-instruction', async () => {
     const sessionId = await freshSession();
     await handlers.handleLoadLibrary({ sessionId, soPath });

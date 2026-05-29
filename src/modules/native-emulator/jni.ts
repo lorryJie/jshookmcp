@@ -25,26 +25,66 @@ export const JNI_INDEX = {
   GetVersion: 4,
   FindClass: 6,
   GetObjectClass: 31,
+  IsInstanceOf: 32,
   GetMethodID: 33,
   CallObjectMethod: 34,
   CallBooleanMethod: 37,
   CallIntMethod: 49,
+  CallLongMethod: 51,
   CallVoidMethod: 61,
+  // Field access (instance).
+  GetFieldID: 94,
+  GetObjectField: 95,
+  GetBooleanField: 96,
+  GetIntField: 100,
+  GetLongField: 101,
+  SetObjectField: 104,
+  SetBooleanField: 105,
+  SetIntField: 109,
+  SetLongField: 110,
   GetStaticMethodID: 113,
   CallStaticObjectMethod: 114,
+  CallStaticBooleanMethod: 117,
   CallStaticIntMethod: 119,
+  CallStaticLongMethod: 121,
+  CallStaticVoidMethod: 143,
+  // Static field access.
+  GetStaticFieldID: 144,
+  GetStaticObjectField: 145,
+  GetStaticBooleanField: 146,
+  GetStaticIntField: 150,
+  GetStaticLongField: 151,
+  SetStaticObjectField: 154,
+  SetStaticIntField: 159,
+  // Strings.
+  NewStringUTF: 167,
   GetStringUTFLength: 168,
   GetStringUTFChars: 169,
   ReleaseStringUTFChars: 170,
-  NewStringUTF: 167,
   GetArrayLength: 171,
+  // Object arrays.
+  NewObjectArray: 172,
+  GetObjectArrayElement: 173,
+  SetObjectArrayElement: 174,
   NewByteArray: 176,
   GetByteArrayElements: 184,
   ReleaseByteArrayElements: 187,
-  SetByteArrayRegion: 209,
   GetByteArrayRegion: 208,
+  SetByteArrayRegion: 209,
   RegisterNatives: 215,
   GetJavaVM: 219,
+  // Exceptions.
+  Throw: 13,
+  ThrowNew: 14,
+  ExceptionOccurred: 15,
+  ExceptionClear: 17,
+  ExceptionCheck: 228,
+  // References.
+  NewGlobalRef: 21,
+  DeleteGlobalRef: 22,
+  DeleteLocalRef: 23,
+  NewLocalRef: 25,
+  IsSameObject: 24,
 } as const;
 
 /** JNIInvokeInterface (JavaVM) slot indices: 3 reserved, then the calls. */
@@ -74,6 +114,8 @@ interface JavaClass {
   name: string;
   /** methodName+signature → jmethodID handle. */
   methods: Map<string, number>;
+  /** fieldName+signature → jfieldID handle. */
+  fields: Map<string, number>;
 }
 
 /** A native method registered via RegisterNatives (or installed directly). */
@@ -82,6 +124,15 @@ export interface NativeMethodBinding {
   signature: string;
   /** Guest address of the native implementation (entry to BL/callSymbol). */
   fnAddr: number;
+}
+
+/** A mock Java field's declared value (the constant native code reads back). */
+interface JavaFieldEntry {
+  className: string;
+  name: string;
+  sig: string;
+  /** Declared value: a primitive bigint, or a handle (string/bytes) allocated lazily. */
+  value: bigint;
 }
 
 export class JniEnvironment {
@@ -100,6 +151,10 @@ export class JniEnvironment {
   private readonly arrayElements = new Map<number, { handle: number; length: number }>();
   /** Mock "Java world": jmethodID handle → its JS implementation. */
   private readonly javaMethods = new Map<number, JavaMethodEntry>();
+  /** Mock Java fields: jfieldID handle → its declared value. */
+  private readonly javaFields = new Map<number, JavaFieldEntry>();
+  /** Currently-pending exception handle (0 = none), set by Throw/ThrowNew. */
+  private pendingException = 0;
 
   constructor(engine: CpuEngine) {
     this.engine = engine;
@@ -123,7 +178,7 @@ export class JniEnvironment {
     if (existing !== undefined) return existing;
     const handle = this.allocHandle({ kind: 'class', name });
     this.classes.set(name, handle);
-    this.classByHandle.set(handle, { name, methods: new Map() });
+    this.classByHandle.set(handle, { name, methods: new Map(), fields: new Map() });
     return handle;
   }
 
@@ -150,6 +205,24 @@ export class JniEnvironment {
       cls.methods.set(key, id);
     }
     this.javaMethods.set(id, { className, name, sig, impl });
+  }
+
+  /**
+   * Register a mock Java field. When emulated native code calls
+   * GetFieldID/GetStaticFieldID then Get<Type>Field, the dispatch returns this
+   * declared `value` (a primitive, or a handle for object fields). Mirrors
+   * registerJavaMethod for the "Java world" a native routine reads constants from.
+   */
+  registerJavaField(className: string, name: string, sig: string, value: bigint): void {
+    const cls = this.classByHandle.get(this.defineClass(className));
+    if (!cls) return;
+    const key = `${name}#${sig}`;
+    let id = cls.fields.get(key);
+    if (id === undefined) {
+      id = this.allocHandle({ kind: 'field', name, sig, cls: className });
+      cls.fields.set(key, id);
+    }
+    this.javaFields.set(id, { className, name, sig, value });
   }
 
   /** Look up a native binding registered for a class/method/signature. */
@@ -199,6 +272,63 @@ export class JniEnvironment {
     this.bind(JNI_INDEX.CallVoidMethod, (ctx) => this.jniCallMethod(ctx));
     this.bind(JNI_INDEX.CallStaticObjectMethod, (ctx) => this.jniCallMethod(ctx));
     this.bind(JNI_INDEX.CallStaticIntMethod, (ctx) => this.jniCallMethod(ctx));
+    this.bind(JNI_INDEX.CallLongMethod, (ctx) => this.jniCallMethod(ctx));
+    this.bind(JNI_INDEX.CallStaticBooleanMethod, (ctx) => this.jniCallMethod(ctx));
+    this.bind(JNI_INDEX.CallStaticLongMethod, (ctx) => this.jniCallMethod(ctx));
+    this.bind(JNI_INDEX.CallStaticVoidMethod, (ctx) => this.jniCallMethod(ctx));
+
+    // Field access — GetFieldID/GetStaticFieldID return a jfieldID; the typed
+    // getters return the declared mock value. Setters are accepted as no-ops
+    // (the mock "Java world" is read-only from native code's perspective).
+    this.bind(JNI_INDEX.GetFieldID, (ctx) => this.jniGetFieldID(ctx));
+    this.bind(JNI_INDEX.GetStaticFieldID, (ctx) => this.jniGetFieldID(ctx));
+    this.bind(JNI_INDEX.GetObjectField, (ctx) => this.jniGetField(ctx));
+    this.bind(JNI_INDEX.GetBooleanField, (ctx) => this.jniGetField(ctx));
+    this.bind(JNI_INDEX.GetIntField, (ctx) => this.jniGetField(ctx));
+    this.bind(JNI_INDEX.GetLongField, (ctx) => this.jniGetField(ctx));
+    this.bind(JNI_INDEX.GetStaticObjectField, (ctx) => this.jniGetStaticField(ctx));
+    this.bind(JNI_INDEX.GetStaticBooleanField, (ctx) => this.jniGetStaticField(ctx));
+    this.bind(JNI_INDEX.GetStaticIntField, (ctx) => this.jniGetStaticField(ctx));
+    this.bind(JNI_INDEX.GetStaticLongField, (ctx) => this.jniGetStaticField(ctx));
+    this.bind(JNI_INDEX.SetObjectField, () => undefined);
+    this.bind(JNI_INDEX.SetBooleanField, () => undefined);
+    this.bind(JNI_INDEX.SetIntField, () => undefined);
+    this.bind(JNI_INDEX.SetLongField, () => undefined);
+    this.bind(JNI_INDEX.SetStaticObjectField, () => undefined);
+    this.bind(JNI_INDEX.SetStaticIntField, () => undefined);
+
+    // Strings & arrays beyond the byte-array core.
+    this.bind(JNI_INDEX.GetStringUTFLength, (ctx) => this.jniGetStringUTFLength(ctx));
+    this.bind(JNI_INDEX.GetObjectClass, (ctx) => this.jniGetObjectClass(ctx));
+    this.bind(JNI_INDEX.NewObjectArray, (ctx) => this.jniNewObjectArray(ctx));
+    this.bind(JNI_INDEX.GetObjectArrayElement, (ctx) => this.jniGetObjectArrayElement(ctx));
+    this.bind(JNI_INDEX.SetObjectArrayElement, (ctx) => this.jniSetObjectArrayElement(ctx));
+
+    // Exceptions — a minimal model: Throw/ThrowNew record a pending handle that
+    // ExceptionCheck/ExceptionOccurred report and ExceptionClear resets.
+    this.bind(JNI_INDEX.Throw, (ctx) => {
+      this.pendingException = Number(ctx.x(1));
+      return 0n;
+    });
+    this.bind(JNI_INDEX.ThrowNew, (ctx) => {
+      this.pendingException = this.allocHandle({ kind: 'throwable', cls: Number(ctx.x(1)) });
+      return 0n;
+    });
+    this.bind(JNI_INDEX.ExceptionOccurred, () => BigInt(this.pendingException));
+    this.bind(JNI_INDEX.ExceptionCheck, () => (this.pendingException !== 0 ? 1n : 0n));
+    this.bind(JNI_INDEX.ExceptionClear, () => {
+      this.pendingException = 0;
+      return undefined;
+    });
+
+    // References — handles are process-global in this model, so global/local ref
+    // management is identity (return the same handle) and deletion is a no-op.
+    this.bind(JNI_INDEX.NewGlobalRef, (ctx) => ctx.x(1));
+    this.bind(JNI_INDEX.NewLocalRef, (ctx) => ctx.x(1));
+    this.bind(JNI_INDEX.DeleteGlobalRef, () => undefined);
+    this.bind(JNI_INDEX.DeleteLocalRef, () => undefined);
+    this.bind(JNI_INDEX.IsSameObject, (ctx) => (ctx.x(1) === ctx.x(2) ? 1n : 0n));
+    this.bind(JNI_INDEX.IsInstanceOf, () => 1n); // optimistic: assume instance-of holds
   }
 
   private installVmTable(): void {
@@ -370,6 +500,77 @@ export class JniEnvironment {
     return result === undefined ? 0n : BigInt.asUintN(64, BigInt(result));
   }
 
+  /**
+   * jfieldID GetFieldID/GetStaticFieldID(JNIEnv*, jclass, name, sig): resolve (or
+   * lazily mint) the field handle for the class so a later Get*Field can find it.
+   */
+  private jniGetFieldID(ctx: HostContext): bigint {
+    const cls = this.classByHandle.get(Number(ctx.x(1)));
+    const name = this.readCString(ctx, Number(ctx.x(2)));
+    const sig = this.readCString(ctx, Number(ctx.x(3)));
+    const key = `${name}#${sig}`;
+    if (cls) {
+      const existing = cls.fields.get(key);
+      if (existing !== undefined) return BigInt(existing);
+      const id = this.allocHandle({ kind: 'field', name, sig, cls: cls.name });
+      cls.fields.set(key, id);
+      return BigInt(id);
+    }
+    return BigInt(this.allocHandle({ kind: 'field', name, sig }));
+  }
+
+  /** Get<Type>Field(JNIEnv*, jobject, jfieldID): return the declared mock value. */
+  private jniGetField(ctx: HostContext): bigint {
+    const entry = this.javaFields.get(Number(ctx.x(2)));
+    return entry ? entry.value : 0n;
+  }
+
+  /** GetStatic<Type>Field(JNIEnv*, jclass, jfieldID): same lookup as instance. */
+  private jniGetStaticField(ctx: HostContext): bigint {
+    const entry = this.javaFields.get(Number(ctx.x(2)));
+    return entry ? entry.value : 0n;
+  }
+
+  /** jsize GetStringUTFLength(JNIEnv*, jstring): UTF-8 byte length of the string. */
+  private jniGetStringUTFLength(ctx: HostContext): bigint {
+    const value = this.handles.get(Number(ctx.x(1)));
+    const str = isStringValue(value) ? value.value : '';
+    return BigInt(new TextEncoder().encode(str).length);
+  }
+
+  /** jclass GetObjectClass(JNIEnv*, jobject): the object's class handle (best-effort). */
+  private jniGetObjectClass(ctx: HostContext): bigint {
+    const value = this.handles.get(Number(ctx.x(1)));
+    if (value && typeof value === 'object' && 'cls' in value) {
+      const clsName = (value as { cls?: string }).cls;
+      if (typeof clsName === 'string') return BigInt(this.defineClass(clsName));
+    }
+    return BigInt(this.defineClass('java/lang/Object'));
+  }
+
+  /** jobjectArray NewObjectArray(JNIEnv*, jsize len, jclass, jobject init). */
+  private jniNewObjectArray(ctx: HostContext): bigint {
+    const length = Number(ctx.x(1));
+    const init = ctx.x(3);
+    const arr = Array.from<bigint>({ length }).fill(init);
+    return BigInt(this.allocHandle({ kind: 'objarray', value: arr }));
+  }
+
+  /** jobject GetObjectArrayElement(JNIEnv*, jobjectArray, jsize index). */
+  private jniGetObjectArrayElement(ctx: HostContext): bigint {
+    const value = this.handles.get(Number(ctx.x(1)));
+    const idx = Number(ctx.x(2));
+    if (isObjArrayValue(value)) return value.value[idx] ?? 0n;
+    return 0n;
+  }
+
+  /** void SetObjectArrayElement(JNIEnv*, jobjectArray, jsize index, jobject val). */
+  private jniSetObjectArrayElement(ctx: HostContext): void {
+    const value = this.handles.get(Number(ctx.x(1)));
+    const idx = Number(ctx.x(2));
+    if (isObjArrayValue(value)) value.value[idx] = ctx.x(3);
+  }
+
   // ── Guest memory helpers ──
 
   /** Map a fresh guest buffer, copy bytes in, return its address. */
@@ -420,6 +621,10 @@ interface BytesValue {
   kind: 'bytes';
   value: Uint8Array;
 }
+interface ObjArrayValue {
+  kind: 'objarray';
+  value: bigint[];
+}
 
 /** Arguments handed to a mock Java method implementation. */
 export interface JavaMethodCall {
@@ -447,4 +652,8 @@ function isStringValue(v: unknown): v is StringValue {
 
 function isBytesValue(v: unknown): v is BytesValue {
   return typeof v === 'object' && v !== null && (v as { kind?: string }).kind === 'bytes';
+}
+
+function isObjArrayValue(v: unknown): v is ObjArrayValue {
+  return typeof v === 'object' && v !== null && (v as { kind?: string }).kind === 'objarray';
 }

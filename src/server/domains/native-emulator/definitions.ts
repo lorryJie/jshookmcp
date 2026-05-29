@@ -113,6 +113,20 @@ export const nativeEmulatorTools: Tool[] = [
       .string('returnBytes', 'Constant base64 bytes to return as a jbyteArray handle (exclusive)')
       .required('sessionId', 'className', 'methodName', 'signature'),
   ),
+  tool('nemu_setup_java_field', (t) =>
+    t
+      .desc(
+        "Register a mock Java field the emulated native code reads back via JNI (GetFieldID/GetStaticFieldID + Get<Type>Field). Declaratively specify the value with valueInt, valueString, or valueBytes (base64) — the 'Java world' constant a native routine folds into its result. No code is executed.",
+      )
+      .string('sessionId', 'Session id for the mock registration')
+      .string('className', 'Java class name, e.g. "com/app/Config"')
+      .string('fieldName', 'Field name the native code looks up')
+      .string('signature', 'JNI field signature, e.g. "I", "J", or "Ljava/lang/String;"')
+      .number('valueInt', 'Constant int/long/boolean value (mutually exclusive)')
+      .string('valueString', 'Constant string returned as a jstring handle (mutually exclusive)')
+      .string('valueBytes', 'Constant base64 bytes returned as a jbyteArray handle (exclusive)')
+      .required('sessionId', 'className', 'fieldName', 'signature'),
+  ),
   tool('nemu_new_byte_array', (t) =>
     t
       .desc(

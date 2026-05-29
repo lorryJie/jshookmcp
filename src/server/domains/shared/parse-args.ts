@@ -102,6 +102,13 @@ export function argStringArray(args: Args, key: string): string[] {
   return v.filter((item): item is string => typeof item === 'string');
 }
 
+/** Extract a number array arg, keeping only finite numeric entries. */
+export function argNumberArray(args: Args, key: string): number[] {
+  const v = args[key];
+  if (!Array.isArray(v)) return [];
+  return v.filter((item): item is number => typeof item === 'number' && Number.isFinite(item));
+}
+
 /** Extract an object arg, returning `undefined` when absent or wrong type. */
 export function argObject(args: Args, key: string): Record<string, unknown> | undefined {
   const v = args[key];

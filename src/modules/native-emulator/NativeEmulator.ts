@@ -109,6 +109,15 @@ export class NativeEmulator {
     this.jni.registerJavaMethod(className, name, signature, impl);
   }
 
+  /**
+   * Register a mock Java field the emulated native code reads back via
+   * GetFieldID/GetStaticFieldID + Get<Type>Field. `value` is the declared
+   * constant (a primitive as bigint, or a handle from newByteArray for objects).
+   */
+  setupJavaField(className: string, name: string, signature: string, value: bigint): void {
+    this.jni.registerJavaField(className, name, signature, value);
+  }
+
   /** Wrap a JS byte buffer as a jbyteArray handle to pass into a native call. */
   newByteArray(bytes: Uint8Array): number {
     return this.jni.allocHandle({ kind: 'bytes', value: bytes });

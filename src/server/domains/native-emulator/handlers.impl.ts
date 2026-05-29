@@ -185,6 +185,24 @@ export class NativeEmulatorHandlers {
     });
   }
 
+  handleSetupJavaField(args: ToolArgs): Promise<ToolResponse> {
+    return handleSafe(async () => {
+      const session = this.requireSession(args);
+      const className = argStringRequired(args, 'className');
+      const fieldName = argStringRequired(args, 'fieldName');
+      const signature = argStringRequired(args, 'signature');
+      const field = buildJavaFieldValue(session, args);
+      session.emulator.setupJavaField(className, fieldName, signature, field.value);
+      return {
+        sessionId: session.id,
+        className,
+        fieldName,
+        signature,
+        kind: field.kind,
+      };
+    });
+  }
+
   handleNewByteArray(args: ToolArgs): Promise<ToolResponse> {
     return handleSafe(async () => {
       const session = this.requireSession(args);
@@ -311,4 +329,35 @@ function buildJavaMockImpl(args: ToolArgs): JavaMockImpl {
     };
   }
   return { kind: 'void', fn: () => undefined };
+}
+
+/** A resolved mock-field value: a primitive int, or a handle to a string/bytes object. */
+interface JavaFieldValue {
+  kind: 'int' | 'string' | 'bytes';
+  value: bigint;
+}
+
+/**
+ * Resolve a declarative field spec into the bigint the JNI Get<Type>Field returns.
+ * valueInt is the primitive; valueString/valueBytes are allocated as handles in
+ * the session's JNI object table (so Get*Field returns a jstring/jbyteArray).
+ */
+function buildJavaFieldValue(session: EmulatorSession, args: ToolArgs): JavaFieldValue {
+  const valueInt = argNumber(args, 'valueInt');
+  const valueString = argString(args, 'valueString');
+  const valueBytes = argString(args, 'valueBytes');
+
+  if (valueInt !== undefined) {
+    return { kind: 'int', value: BigInt(Math.trunc(valueInt)) };
+  }
+  if (valueString !== undefined) {
+    const handle = session.emulator.jni.allocHandle({ kind: 'string', value: valueString });
+    return { kind: 'string', value: BigInt(handle) };
+  }
+  if (valueBytes !== undefined) {
+    const bytes = toUint8(Buffer.from(valueBytes, 'base64'));
+    const handle = session.emulator.newByteArray(bytes);
+    return { kind: 'bytes', value: BigInt(handle) };
+  }
+  return { kind: 'int', value: 0n };
 }
