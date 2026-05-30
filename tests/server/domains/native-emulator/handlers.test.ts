@@ -156,6 +156,9 @@ describe('NativeEmulatorHandlers — happy path', () => {
     const features = data.features as string[];
     // Phase 2-5 capabilities are surfaced for an AI to discover.
     expect(features).toContain('elf-relocations');
+    // DT_INIT_ARRAY constructors run after relocation (a real .so with C++ static
+    // constructors needs this to initialize its globals before its API is called).
+    expect(features).toContain('init-array-constructors');
     expect(features).toContain('auto-wire-bionic-libc');
     // Bionic stdio VFS lets anti-tamper file probes (RootBeer exists()) be evaluated.
     expect(features).toContain('bionic-stdio-vfs');

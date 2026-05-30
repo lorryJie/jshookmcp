@@ -190,7 +190,42 @@ export class CpuEngine {
     }
     this.symbols = elf.exportedSymbols();
     this.applyRelocations(elf, bionic);
+    this.runInitializers(elf);
     return { entry: elf.entry };
+  }
+
+  /**
+   * Run the object's initializers (DT_INIT, then each DT_INIT_ARRAY entry) the
+   * way a dynamic linker does immediately after relocation — without this step a
+   * `.so` built with C++ static constructors or `__attribute__((constructor))`
+   * functions has its global subsystems left NULL, so its public API
+   * short-circuits (e.g. SQLite's sqlite3_initialize bails before allocating, so
+   * sqlite3_open returns a NULL handle). The init-array slots are read out of
+   * *relocated* guest memory: each slot held an R_AARCH64_RELATIVE fixup whose
+   * on-disk value was 0 and only became the real constructor address once
+   * applyRelocations ran. Each constructor is invoked C-style — argc=0, argv=
+   * envp=NULL in x0..x2 — and run to return on a fresh frame, reusing the same
+   * sentinel-LR halt mechanism as callSymbol.
+   */
+  private runInitializers(elf: ElfLoader): void {
+    const { init, arraySlots } = elf.initializers();
+    const ctors: number[] = [];
+    if (init !== 0) ctors.push(init); // DT_INIT is the function address directly.
+    for (const slot of arraySlots) {
+      const fn = Number(this.loadValue(slot, 8)); // slot holds the (relocated) ptr.
+      if (fn !== 0) ctors.push(fn);
+    }
+    for (const ctor of ctors) this.runConstructor(ctor);
+  }
+
+  /** Invoke a constructor at `addr` with (argc=0, argv=NULL, envp=NULL), to return. */
+  private runConstructor(addr: number): void {
+    this.gpr[0] = 0n;
+    this.gpr[1] = 0n;
+    this.gpr[2] = 0n;
+    this.gpr[30] = BigInt(RETURN_SENTINEL); // LR → halt marker
+    this.sp = BigInt(this.ensureStack());
+    this.run(addr, RETURN_SENTINEL);
   }
 
   /**
@@ -1410,12 +1445,19 @@ export class CpuEngine {
       }
 
       if (form === 0b00) {
-        // Unscaled (LDUR/STUR, idx=00) or pre/post-index (idx 11/01): imm9 signed.
+        // imm9-offset forms, distinguished by idx (bits 11:10):
+        //   00 unscaled (LDUR/STUR): address = base + imm9, no writeback.
+        //   01 post-index: access at base, then writeback base + imm9.
+        //   11 pre-index: access at base + imm9, with writeback.
+        // (Only post-index uses the bare base; unscaled and pre-index both add
+        // imm9 to form the effective address — the earlier code applied imm9 to
+        // pre-index only, so every STUR/LDUR with a non-zero offset hit the wrong
+        // address and silently lost the access.)
         const imm9raw = (insn >>> 12) & 0x1ff;
         const imm9 = imm9raw & 0x100 ? imm9raw - 0x200 : imm9raw;
         const idx = (insn >>> 10) & 0b11;
         const base = Number(this.readGprSp(rn));
-        const addr = idx === 0b11 ? base + imm9 : base; // pre adds before, post/unscaled at base
+        const addr = idx === 0b01 ? base : base + imm9; // post-index accesses base; unscaled/pre add imm9
         if (isLoad) doLoad(addr);
         else this.storeValue(addr, bytes, this.readGpr(rt));
         if (idx === 0b11 || idx === 0b01) {

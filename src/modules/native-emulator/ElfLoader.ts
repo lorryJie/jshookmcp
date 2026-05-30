@@ -37,6 +37,9 @@ const DT_STRSZ = 10;
 const DT_SYMENT = 11;
 const DT_JMPREL = 23;
 const DT_PLTRELSZ = 2;
+const DT_INIT = 12;
+const DT_INIT_ARRAY = 25;
+const DT_INIT_ARRAYSZ = 27;
 
 // AArch64 relocation types (r_info low 32 bits) the loader applies.
 export const R_AARCH64_ABS64 = 257;
@@ -279,6 +282,28 @@ export class ElfLoader {
   }
 
   /**
+   * The object's initializers, in the order a dynamic linker must run them after
+   * relocation: the legacy DT_INIT entry first (if present), then each pointer in
+   * the DT_INIT_ARRAY. The returned values are the *vaddrs* of the init-array
+   * slots (and the DT_INIT function vaddr) — NOT the constructor addresses
+   * themselves, because those slots hold R_AARCH64_RELATIVE relocations whose
+   * on-disk value is 0 and only becomes the real function address after the
+   * caller applies relocations. The caller (CpuEngine) therefore reads each slot
+   * out of relocated guest memory to get the actual constructor to call.
+   *
+   * `init` is the DT_INIT function's vaddr directly (it is an address, not a slot
+   * to dereference); `arraySlots` are the vaddrs to read function pointers from.
+   */
+  initializers(): { init: number; arraySlots: number[] } {
+    const dyn = this.dynamicInfo();
+    if (!dyn) return { init: 0, arraySlots: [] };
+    const slots: number[] = [];
+    const count = Math.floor(dyn.initArraySz / 8);
+    for (let i = 0; i < count; i++) slots.push(dyn.initArray + i * 8);
+    return { init: dyn.init, arraySlots: slots };
+  }
+
+  /**
    * Walk PT_DYNAMIC and collect the d_tag/d_val pairs the loader needs. Returns
    * null when the object has no dynamic segment (a static or relocatable file).
    */
@@ -290,6 +315,9 @@ export class ElfLoader {
     relasz: number;
     jmprel: number;
     pltrelsz: number;
+    init: number;
+    initArray: number;
+    initArraySz: number;
   } | null {
     const le = this.isLittleEndian;
     let dynOff = -1;
@@ -303,7 +331,18 @@ export class ElfLoader {
       }
     }
     if (dynOff < 0) return null;
-    const info = { symtab: 0, strtab: 0, strsz: 0, rela: 0, relasz: 0, jmprel: 0, pltrelsz: 0 };
+    const info = {
+      symtab: 0,
+      strtab: 0,
+      strsz: 0,
+      rela: 0,
+      relasz: 0,
+      jmprel: 0,
+      pltrelsz: 0,
+      init: 0,
+      initArray: 0,
+      initArraySz: 0,
+    };
     const entries = Math.floor(dynSize / 16); // Elf64_Dyn = { i64 tag; u64 val }
     for (let i = 0; i < entries; i++) {
       const e = dynOff + i * 16;
@@ -331,6 +370,15 @@ export class ElfLoader {
           break;
         case DT_PLTRELSZ:
           info.pltrelsz = val;
+          break;
+        case DT_INIT:
+          info.init = val;
+          break;
+        case DT_INIT_ARRAY:
+          info.initArray = val;
+          break;
+        case DT_INIT_ARRAYSZ:
+          info.initArraySz = val;
           break;
         case DT_SYMENT:
         default:

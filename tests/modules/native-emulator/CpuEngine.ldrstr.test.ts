@@ -94,4 +94,71 @@ describe('CpuEngine LDR/STR — L3 memory access', () => {
     expect(engine.readRegister('x0')).toBe(0x99); // read from old sp
     expect(engine.readRegister('sp')).toBe(STACK + 16); // base advanced after
   });
+
+  // ── Unscaled (STUR/LDUR, idx bits = 0b00) ──
+  // Regression: the unscaled form must compute address = base + imm9 (no
+  // writeback). A prior bug treated idx=0b00 like post-index (address = base,
+  // ignoring imm9), so every STUR/LDUR with a non-zero offset silently hit the
+  // wrong address — which broke real `.so` (e.g. SQLCipher's inlined mutex-table
+  // copy, a CSEL+STUR sequence, lost all its stores and NULL'd a function ptr).
+
+  it('STUR (unscaled, +imm9) writes to base + imm9 without writeback', () => {
+    const engine = new CpuEngine();
+    const BASE = 0x7000;
+    engine.mapMemory(BASE, 256);
+    engine.writeRegister('x1', BASE);
+    engine.writeRegister('x0', 0xcafe);
+    // stur x0, [x1, #156]  (imm9=156=0x9c) = 0xF8000000 | (156<<12) | (1<<5) | 0
+    const stur = (0xf8000000 | (156 << 12) | (1 << 5) | 0) >>> 0;
+    engine.mapMemory(0x1000, 8);
+    engine.writeCode(0x1000, Uint8Array.from(le32(stur)));
+    engine.start(0x1000, 0x1004);
+    expect(Array.from(engine.readMemory(BASE + 156, 2))).toEqual([0xfe, 0xca]);
+    expect(engine.readRegister('x1')).toBe(BASE); // base NOT written back
+  });
+
+  it('LDUR (unscaled, +imm9) reads from base + imm9 without writeback', () => {
+    const engine = new CpuEngine();
+    const BASE = 0x7000;
+    engine.mapMemory(BASE, 256);
+    engine.writeCode(BASE + 148, Uint8Array.from([0x44, 0x33, 0x22, 0x11, 0, 0, 0, 0]));
+    engine.writeRegister('x1', BASE);
+    // ldur x0, [x1, #148]  (imm9=148=0x94) = 0xF8400000 | (148<<12) | (1<<5) | 0
+    const ldur = (0xf8400000 | (148 << 12) | (1 << 5) | 0) >>> 0;
+    engine.mapMemory(0x1000, 8);
+    engine.writeCode(0x1000, Uint8Array.from(le32(ldur)));
+    engine.start(0x1000, 0x1004);
+    expect(engine.readRegister('x0')).toBe(0x11223344);
+    expect(engine.readRegister('x1')).toBe(BASE); // base NOT written back
+  });
+
+  it('STUR xzr clears 8 bytes at base + imm9 (the mutex-copy zeroing pattern)', () => {
+    const engine = new CpuEngine();
+    const BASE = 0x7000;
+    engine.mapMemory(BASE, 64);
+    // pre-fill with 0xFF so a working STUR xzr is observable as a clear-to-zero
+    engine.writeCode(BASE + 24, Uint8Array.from([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]));
+    engine.writeRegister('x2', BASE);
+    // stur xzr, [x2, #24] = 0xF8000000 | (24<<12) | (2<<5) | 31
+    const stur = (0xf8000000 | (24 << 12) | (2 << 5) | 31) >>> 0;
+    engine.mapMemory(0x1000, 8);
+    engine.writeCode(0x1000, Uint8Array.from(le32(stur)));
+    engine.start(0x1000, 0x1004);
+    expect(Array.from(engine.readMemory(BASE + 24, 8))).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+  });
+
+  it('STUR (unscaled, -imm9) writes to base - offset', () => {
+    const engine = new CpuEngine();
+    const BASE = 0x7080;
+    engine.mapMemory(0x7000, 256);
+    engine.writeRegister('x1', BASE);
+    engine.writeRegister('x0', 0x1234);
+    // stur x0, [x1, #-16]  (imm9 = -16 = 0x1f0 in 9-bit) = 0xF8000000 | (0x1f0<<12) | (1<<5)
+    const stur = (0xf8000000 | (0x1f0 << 12) | (1 << 5) | 0) >>> 0;
+    engine.mapMemory(0x1000, 8);
+    engine.writeCode(0x1000, Uint8Array.from(le32(stur)));
+    engine.start(0x1000, 0x1004);
+    expect(Array.from(engine.readMemory(BASE - 16, 2))).toEqual([0x34, 0x12]);
+    expect(engine.readRegister('x1')).toBe(BASE); // no writeback
+  });
 });
