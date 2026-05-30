@@ -25,6 +25,23 @@ import {
   neonShl,
   neonUshr,
   neonSshr,
+  neonBic,
+  neonOrn,
+  neonBsl,
+  neonCmeq,
+  neonCmge,
+  neonCmhi,
+  neonCmhs,
+  neonCmtst,
+  neonSmin,
+  neonUmax,
+  neonNeg,
+  neonAbs,
+  neonNot,
+  neonCnt,
+  neonClz,
+  neonCmeqZero,
+  neonAdd,
   readLanes,
   packLanes,
 } from '@modules/native-emulator/simd-neon';
@@ -277,5 +294,129 @@ describe('NEON misc — REV, DUP, TBL/TBX, shifts, reductions', () => {
     const signed = packLanes([0xfffbn, 0x0001n, 0x0002n, 0x0003n], 1); // -5, 1, 2, 3
     expect(readLanes(neonSmaxv(signed, 1, 0), 1, 0)[0]).toBe(3n);
     expect(readLanes(neonSminv(signed, 1, 0), 1, 0)[0]).toBe(0xfffbn);
+  });
+});
+
+describe('NEON three-same — bitwise, compare, min/max lane ops', () => {
+  // Byte lanes (size=0). Two registers with hand-pickable lane 0 values.
+  const r = (...xs: number[]): Uint8Array => bytes(...xs);
+
+  it('BIC/ORN complement the second operand', () => {
+    const a = r(0b1111_0000);
+    const b = r(0b1010_1010);
+    // BIC: a & ~b = 0xF0 & 0x55 = 0x50
+    expect(readLanes(neonBic(a, b, 0), 0, 0)[0]).toBe(0x50n);
+    // ORN: a | ~b = 0xF0 | 0x55 = 0xF5
+    expect(readLanes(neonOrn(a, b, 0), 0, 0)[0]).toBe(0xf5n);
+  });
+
+  it('BSL selects bits of Vn/Vm by the Vd mask', () => {
+    const vd = r(0b1100_1100); // selector
+    const vn = r(0b1111_1111);
+    const vm = r(0b0000_0000);
+    // (vd & vn) | (~vd & vm) = 0xCC
+    expect(readLanes(neonBsl(vd, vn, vm, 0), 0, 0)[0]).toBe(0xccn);
+  });
+
+  it('CMEQ/CMGE/CMHI/CMHS/CMTST produce all-ones or all-zeros lanes', () => {
+    const a = r(5, 0x80, 3);
+    const b = r(5, 1, 4);
+    expect(readLanes(neonCmeq(a, b, 0, 0), 0, 0).slice(0, 3)).toEqual([0xffn, 0n, 0n]);
+    // signed: 0x80 = -128 < 1 → CMGE false at lane 1
+    expect(readLanes(neonCmge(a, b, 0, 0), 0, 0).slice(0, 3)).toEqual([0xffn, 0n, 0n]);
+    // unsigned: 0x80 = 128 > 1 → CMHI true at lane 1
+    expect(readLanes(neonCmhi(a, b, 0, 0), 0, 0).slice(0, 3)).toEqual([0n, 0xffn, 0n]);
+    expect(readLanes(neonCmhs(a, b, 0, 0), 0, 0).slice(0, 3)).toEqual([0xffn, 0xffn, 0n]);
+    // CMTST: (a & b) != 0
+    expect(readLanes(neonCmtst(r(0b0011), r(0b0001), 0, 0), 0, 0)[0]).toBe(0xffn);
+    expect(readLanes(neonCmtst(r(0b0010), r(0b0001), 0, 0), 0, 0)[0]).toBe(0n);
+  });
+
+  it('SMIN/UMAX respect signedness', () => {
+    const a = r(0x80, 9); // -128 / 128
+    const b = r(0x01, 4);
+    // SMIN: min(-128, 1) = -128 = 0x80
+    expect(readLanes(neonSmin(a, b, 0, 0), 0, 0)[0]).toBe(0x80n);
+    // UMAX: max(128, 1) = 128 = 0x80
+    expect(readLanes(neonUmax(a, b, 0, 0), 0, 0)[0]).toBe(0x80n);
+    // UMAX lane 1: max(9, 4) = 9
+    expect(readLanes(neonUmax(a, b, 0, 0), 0, 0)[1]).toBe(9n);
+  });
+});
+
+describe('NEON two-register misc — NEG/ABS/NOT/CNT/CLZ/CMEQ#0', () => {
+  const r = (...xs: number[]): Uint8Array => bytes(...xs);
+
+  it('NEG negates each lane (two’s complement)', () => {
+    // -1 = 0xFF, -5 = 0xFB
+    expect(readLanes(neonNeg(r(1, 5), 0, 0), 0, 0).slice(0, 2)).toEqual([0xffn, 0xfbn]);
+  });
+
+  it('ABS takes absolute value of the signed lane', () => {
+    // 0xFB = -5 → abs = 5; 5 stays 5
+    expect(readLanes(neonAbs(r(0xfb, 5), 0, 0), 0, 0).slice(0, 2)).toEqual([5n, 5n]);
+  });
+
+  it('NOT complements every bit', () => {
+    expect(readLanes(neonNot(r(0x0f, 0x00), 0), 0, 0).slice(0, 2)).toEqual([0xf0n, 0xffn]);
+  });
+
+  it('CNT counts set bits per byte', () => {
+    expect(readLanes(neonCnt(r(0xff, 0x01, 0x00), 0), 0, 0).slice(0, 3)).toEqual([8n, 1n, 0n]);
+  });
+
+  it('CLZ counts leading zeros at the element width', () => {
+    // byte lanes: 0x00 → 8, 0x01 → 7, 0x80 → 0
+    expect(readLanes(neonClz(r(0x00, 0x01, 0x80), 0, 0), 0, 0).slice(0, 3)).toEqual([8n, 7n, 0n]);
+  });
+
+  it('CMEQ #0 marks zero lanes', () => {
+    expect(readLanes(neonCmeqZero(r(0, 7, 0), 0, 0), 0, 0).slice(0, 3)).toEqual([0xffn, 0n, 0xffn]);
+  });
+
+  it('REV with 8-byte container (REV64) reverses byte order', () => {
+    const a = bytes(1, 2, 3, 4, 5, 6, 7, 8);
+    const rv = neonRev(a, 8, 0);
+    expect([rv[0], rv[7]]).toEqual([8, 1]);
+  });
+});
+
+describe('NEON 128-bit (Q=1) and wide-lane paths', () => {
+  // Q=1 exercises the full-16-byte `active` branch in readLanes/packLanes and
+  // each op; 64-bit lanes (size=3) exercise the getBigUint64 lane path.
+  it('three-same ops process all 16 byte-lanes under Q=1', () => {
+    const a = bytes(...Array.from({ length: 16 }, (_, i) => i + 1));
+    const b = bytes(...Array.from({ length: 16 }, () => 1));
+    const sum = readLanes(neonAdd(a, b, 0, 1), 0, 1);
+    expect(sum.length).toBe(16);
+    expect(sum[15]).toBe(17n); // lane 15 = 16 + 1
+  });
+
+  it('64-bit lanes (size=3) add through the BigUint64 path', () => {
+    const a = packLanes([0x0102030405060708n, 0x1111111111111111n], 3);
+    const b = packLanes([0x0000000000000001n, 0x2222222222222222n], 3);
+    const out = readLanes(neonAdd(a, b, 3, 1), 3, 1);
+    expect(out[0]).toBe(0x0102030405060709n);
+    expect(out[1]).toBe(0x3333333333333333n);
+  });
+
+  it('CLZ on 64-bit lanes counts across the full width', () => {
+    const a = packLanes([1n, 0n], 3); // lane0 = 1 → 63 leading zeros; lane1 = 0 → 64
+    const out = readLanes(neonClz(a, 3, 1), 3, 1);
+    expect(out[0]).toBe(63n);
+    expect(out[1]).toBe(64n);
+  });
+
+  it('ADDV reduces all 16 byte-lanes under Q=1', () => {
+    const a = bytes(...Array.from({ length: 16 }, () => 2));
+    expect(readLanes(neonAddv(a, 0, 1), 0, 1)[0]).toBe(32n); // 16 lanes × 2
+  });
+
+  it('ZIP1 on 64-bit lanes interleaves the single lower pair', () => {
+    const a = packLanes([0xaaaaaaaaaaaaaaaan, 0xbbbbbbbbbbbbbbbbn], 3);
+    const b = packLanes([0xccccccccccccccccn, 0xddddddddddddddddn], 3);
+    const z = readLanes(neonZip(a, b, 3, 1, 0), 3, 1);
+    expect(z[0]).toBe(0xaaaaaaaaaaaaaaaan);
+    expect(z[1]).toBe(0xccccccccccccccccn);
   });
 });
