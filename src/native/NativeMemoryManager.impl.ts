@@ -30,6 +30,7 @@ import type {
 } from '@native/NativeMemoryManager.types';
 import { findPatternInBuffer, parsePattern } from '@native/NativeMemoryManager.utils';
 import { checkNativeMemoryAvailability } from '@native/NativeMemoryManager.availability';
+import { USERSPACE_MAX_ADDRESS } from '@src/constants';
 export type {
   MemoryRegion,
   ModuleInfo,
@@ -190,7 +191,7 @@ export class NativeMemoryManager {
 
       try {
         let address = 0n;
-        const maxAddress = BigInt('0x7FFFFFFF0000');
+        const maxAddress = USERSPACE_MAX_ADDRESS;
 
         while (address < maxAddress) {
           const regionInfo = this.provider.queryRegion(handle, address);
@@ -289,7 +290,7 @@ export class NativeMemoryManager {
 
       try {
         let address = 0n;
-        const maxAddress = BigInt('0x7FFFFFFF0000');
+        const maxAddress = USERSPACE_MAX_ADDRESS;
 
         while (address < maxAddress) {
           const regionInfo = this.provider.queryRegion(handle, address);

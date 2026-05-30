@@ -188,6 +188,7 @@ vi.mock('@src/constants', () => ({
   SCAN_UNKNOWN_INITIAL_MAX_ADDRESSES: 5000,
   SCAN_POINTER_MAX_RESULTS: 10000,
   SCAN_GROUP_MAX_PATTERN_SIZE: 1024,
+  USERSPACE_MAX_ADDRESS: 0x7fff_ffff_0000n,
 }));
 
 // ── Import AFTER all mocks ──

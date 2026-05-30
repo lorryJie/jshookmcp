@@ -19,6 +19,7 @@ import {
   SCAN_UNKNOWN_INITIAL_MAX_ADDRESSES,
   SCAN_POINTER_MAX_RESULTS,
   SCAN_GROUP_MAX_PATTERN_SIZE,
+  USERSPACE_MAX_ADDRESS,
 } from '@src/constants';
 import type { NativeMemoryManager } from './NativeMemoryManager.impl';
 import { nativeMemoryManager } from './NativeMemoryManager.impl';
@@ -356,11 +357,6 @@ export class MemoryScanner {
       const regions = this.getFilteredRegions(handle, scanOptions);
 
       for (const region of regions) {
-        if (options.moduleOnly /* unused cast */) {
-        }
-        // Use scanOptions for onProgress if we added it, but wait, pointerScan doesn't accept onProgress yet in its
-        // options!
-        // We'll update pointerScan options separately if needed. For now just loop:
         if (pointers.length >= maxResults) break;
 
         const regionBase = region.baseAddress;
@@ -557,9 +553,9 @@ export class MemoryScanner {
     options: ScanOptions,
   ): Promise<ScanResult> {
     const start = performance.now();
-    const patternType = (valueType === 'pointer' ? 'uint64' : valueType) as Parameters<
-      typeof this.nmm.scanMemory
-    >[2];
+    // Only variable-length types (size 0) reach this path: 'hex' and 'string'.
+    // 'string' is scanned as a byte/hex pattern by the underlying engine.
+    const patternType: 'hex' | 'string' = valueType === 'hex' ? 'hex' : 'string';
     const result = await this.nmm.scanMemory(pid, value, patternType);
 
     if (!result.success) {
@@ -593,7 +589,7 @@ export class MemoryScanner {
   ): Array<{ baseAddress: bigint; size: number }> {
     const regions: Array<{ baseAddress: bigint; size: number }> = [];
     let address = 0n;
-    const maxAddress = BigInt('0x7FFFFFFF0000');
+    const maxAddress = USERSPACE_MAX_ADDRESS;
     const filter = options.regionFilter;
 
     while (address < maxAddress) {

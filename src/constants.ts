@@ -635,6 +635,13 @@ export const SCAN_SESSION_MAX_COUNT = int('SCAN_SESSION_MAX_COUNT', 20);
 /** Scan session inactivity TTL (ms). Default: 30 min. */
 export const SCAN_SESSION_TTL_MS = int('SCAN_SESSION_TTL_MS', 1_800_000);
 
+/**
+ * Upper bound of the Windows x64 user-mode virtual address space (0x7FFF_FFFF_0000).
+ * Region-walking scans stop here so they never probe kernel space. It is an
+ * architectural ceiling, not a tunable, so it is a fixed bigint.
+ */
+export const USERSPACE_MAX_ADDRESS = 0x7fff_ffff_0000n;
+
 /** Max BFS depth for multi-level pointer chain scanning. */
 export const POINTER_CHAIN_MAX_DEPTH = int('POINTER_CHAIN_MAX_DEPTH', 6);
 /** Max offset (bytes) between pointer value and target to consider a match. */
