@@ -32,9 +32,9 @@
 | `nemu_extract_apk_libs` | 列出 APK 中可加载的 arm64-v8a native 库（.so）及其字节大小。libapp.so（Flutter Dart AOT）会被列出但无法在此执行，应交给 Dart 层。 |
 | `nemu_load_apk_library` | 按名称从 APK 中抽取指定的 arm64-v8a .so 并一步加载进会话（无临时文件）。配合 nemu_extract_apk_libs 发现库名。 |
 | `nemu_list_symbols` | 列出已加载库的导出函数符号——即可被 call_symbol / call_jni_export 调用的名字。 |
-| `nemu_call_symbol` | 按 AArch64 AAPCS 调用约定调用一个导出函数（参数放 x0..x7，结果在 x0）。用于普通 native 导出；Java_* JNI 入口请用 call_jni_export。 |
-| `nemu_call_jni_export` | 调用一个导出的 Java_* JNI 函数。自动注入 JNIEnv* 与 thiz，再传入 Java 参数。返回 x0——直接是 int/jboolean，或是 jobject/jbyteArray/jstring 句柄（用 read_byte_array 解析）。逆向 native 签名/加密例程的主入口。 |
-| `nemu_setup_java_mock` | 注册一个模拟 Java 方法，供被仿真的 native 代码经 JNI 回调（GetMethodID/GetStaticMethodID + Call*Method）。用 returnInt、returnString 或 returnBytes（base64）声明式指定返回值——模拟 native 例程计算前读取的「Java 世界」。不执行任何代码，仅返回配置的常量。 |
+| `nemu_call_symbol` | 按 AArch64 AAPCS 调用约定调用一个导出函数（参数放 x0..x7，结果在 x0）。用于普通 native 导出；`Java_*` JNI 入口请用 call_jni_export。 |
+| `nemu_call_jni_export` | 调用一个导出的 `Java_*` JNI 函数。自动注入 `JNIEnv*` 与 thiz，再传入 Java 参数。返回 x0——直接是 int/jboolean，或是 jobject/jbyteArray/jstring 句柄（用 read_byte_array 解析）。逆向 native 签名/加密例程的主入口。 |
+| `nemu_setup_java_mock` | 注册一个模拟 Java 方法，供被仿真的 native 代码经 JNI 回调（GetMethodID/GetStaticMethodID + `Call*Method`）。用 returnInt、returnString 或 returnBytes（base64）声明式指定返回值——模拟 native 例程计算前读取的「Java 世界」。不执行任何代码，仅返回配置的常量。 |
 | `nemu_setup_java_field` | 待补充中文：Register a mock Java field the emulated native code reads back via JNI (GetFieldID/GetStaticFieldID + Get&lt;Type&gt;Field). Declaratively specify the value with valueInt, valueString, or valueBytes (base64) — the 'Java world' constant a native routine folds into its result. No code is executed. |
 | `nemu_new_byte_array` | 将 base64 字节包装成 JNI jbyteArray 句柄，作为参数传入 call_jni_export（如签名例程要处理的明文）。返回该句柄。 |
 | `nemu_read_byte_array` | 将 jbyteArray 句柄（如 native 调用的返回值）解析回字节，以 base64 加长度返回。 |

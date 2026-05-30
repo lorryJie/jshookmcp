@@ -81,7 +81,7 @@ export const nativeEmulatorTools: Tool[] = [
   tool('nemu_call_symbol', (t) =>
     t
       .desc(
-        'Invoke an exported function by name following AArch64 AAPCS (integer args in x0..x7, result in x0). For plain native exports; use call_jni_export for Java_* JNI entry points.',
+        'Invoke an exported function by name following AArch64 AAPCS (integer args in x0..x7, result in x0). For plain native exports; use call_jni_export for `Java_*` JNI entry points.',
       )
       .string('sessionId', 'Session id with a library already loaded')
       .string('symbol', 'Exported symbol name to call')
@@ -91,10 +91,10 @@ export const nativeEmulatorTools: Tool[] = [
   tool('nemu_call_jni_export', (t) =>
     t
       .desc(
-        'Invoke an exported Java_* JNI function. Injects the guest JNIEnv* and thiz, then the Java arguments. Returns x0 — an int/jboolean directly, or a jobject/jbyteArray/jstring handle to resolve via read_byte_array. The main entry point for reversing a native signing/crypto routine.',
+        'Invoke an exported `Java_*` JNI function. Injects the guest `JNIEnv*` and thiz, then the Java arguments. Returns x0 — an int/jboolean directly, or a jobject/jbyteArray/jstring handle to resolve via read_byte_array. The main entry point for reversing a native signing/crypto routine.',
       )
       .string('sessionId', 'Session id with a library already loaded')
-      .string('symbol', 'Exported Java_* JNI function name')
+      .string('symbol', 'Exported `Java_*` JNI function name')
       .array('javaArgs', { type: 'number' }, 'Java arguments (ints or jobject handles) after thiz')
       .number('thiz', 'Receiver handle (jobject/jclass); 0 for static/none', { default: 0 })
       .required('sessionId', 'symbol'),
@@ -102,7 +102,7 @@ export const nativeEmulatorTools: Tool[] = [
   tool('nemu_setup_java_mock', (t) =>
     t
       .desc(
-        "Register a mock Java method the emulated native code can call back into via JNI (GetMethodID/GetStaticMethodID + Call*Method). Declaratively specify the return value with returnInt, returnString, or returnBytes (base64) — emulating the 'Java world' a native routine reads from before computing its result. No code is executed; only the configured constant is returned.",
+        "Register a mock Java method the emulated native code can call back into via JNI (GetMethodID/GetStaticMethodID + `Call*Method`). Declaratively specify the return value with returnInt, returnString, or returnBytes (base64) — emulating the 'Java world' a native routine reads from before computing its result. No code is executed; only the configured constant is returned.",
       )
       .string('sessionId', 'Session id for the mock registration')
       .string('className', 'Java class name, e.g. "com/app/Config"')
