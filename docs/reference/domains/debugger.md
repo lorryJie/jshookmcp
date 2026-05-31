@@ -1,4 +1,4 @@
-# Debugger
+# 调试器
 
 域名：`debugger`
 

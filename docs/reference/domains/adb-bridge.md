@@ -1,4 +1,4 @@
-# ADB Bridge
+# ADB 桥接
 
 域名：`adb-bridge`
 

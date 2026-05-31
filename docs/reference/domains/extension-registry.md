@@ -1,4 +1,4 @@
-# Extension Registry
+# 扩展注册
 
 域名：`extension-registry`
 

@@ -1,4 +1,4 @@
-# GraphQL
+# 图查询
 
 域名：`graphql`
 

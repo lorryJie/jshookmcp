@@ -1,4 +1,4 @@
-# Binary Secrets
+# 二进制密钥
 
 域名：`binary-secrets`
 

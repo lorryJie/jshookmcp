@@ -1,4 +1,4 @@
-# Shared State Board
+# 共享状态板
 
 域名：`shared-state-board`
 

@@ -1,4 +1,4 @@
-# Skia Capture
+# Skia 捕获
 
 域名：`skia-capture`
 

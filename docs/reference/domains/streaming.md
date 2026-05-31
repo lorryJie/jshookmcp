@@ -1,4 +1,4 @@
-# Streaming
+# 流式
 
 域名：`streaming`
 
