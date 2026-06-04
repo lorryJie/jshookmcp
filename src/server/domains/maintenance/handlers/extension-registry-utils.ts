@@ -206,17 +206,19 @@ export class RegistryFetchError extends Error {
   }
 }
 
+export function resolveCommand(command: string): string {
+  if (process.platform !== 'win32') {
+    return command;
+  }
+  // Use the .cmd shim on Windows — handles spaces in paths correctly
+  return command.endsWith('.cmd') || command.endsWith('.exe') ? command : `${command}.cmd`;
+}
+
 function resolvePackageManagerInvocation(
   packageManager: PackageManagerCommand,
   args: string[],
 ): { command: string; args: string[] } {
-  if (process.platform !== 'win32') {
-    /* istanbul ignore next -- OS specific fallback */
-    return { command: packageManager, args };
-  }
-
-  // Use the .cmd shim on Windows — handles spaces in paths correctly
-  return { command: `${packageManager}.cmd`, args };
+  return { command: resolveCommand(packageManager), args };
 }
 
 export async function execPackageManager(

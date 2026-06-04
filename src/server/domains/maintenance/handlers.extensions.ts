@@ -147,10 +147,11 @@ export class ExtensionManagementHandlers {
 
       await mkdir(dirname(installDir), { recursive: true });
 
-      await execFileAsync('git', ['clone', entry.source.repo, installDir], {
+      const gitCmd = process.platform === 'win32' ? 'git.exe' : 'git';
+      await execFileAsync(gitCmd, ['clone', entry.source.repo, installDir], {
         timeout: EXTENSION_GIT_CLONE_TIMEOUT_MS,
       });
-      await execFileAsync('git', ['-C', installDir, 'checkout', entry.source.commit], {
+      await execFileAsync(gitCmd, ['-C', installDir, 'checkout', entry.source.commit], {
         timeout: EXTENSION_GIT_CHECKOUT_TIMEOUT_MS,
       });
 

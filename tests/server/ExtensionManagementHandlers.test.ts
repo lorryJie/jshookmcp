@@ -177,14 +177,22 @@ describe('ExtensionManagementHandlers', () => {
     expect(metadataCall[1]).toContain('"entry": "dist/workflow.js"');
     // @ts-expect-error — auto-suppressed [TS18048, TS2493]
     expect(metadataCall[2]).toBe('utf8');
+    const gitCmd = process.platform === 'win32' ? 'git.exe' : 'git';
     expect(execFileMock).toHaveBeenNthCalledWith(
       1,
-      'git',
+      gitCmd,
       [
         'clone',
         'https://github.com/vmoranv/jshook_workflow_batch_register',
         expect.stringContaining('workflows'),
       ],
+      expect.objectContaining({ timeout: expect.any(Number) }),
+      expect.any(Function),
+    );
+    expect(execFileMock).toHaveBeenNthCalledWith(
+      2,
+      gitCmd,
+      ['-C', expect.stringContaining('workflows'), 'checkout', 'abc123'],
       expect.objectContaining({ timeout: expect.any(Number) }),
       expect.any(Function),
     );
@@ -276,9 +284,10 @@ describe('ExtensionManagementHandlers', () => {
     expect(metadataCall[1]).toContain('"entry": "dist/manifest.js"');
     // @ts-expect-error — auto-suppressed [TS18048, TS2493]
     expect(metadataCall[2]).toBe('utf8');
+    const gitCmd = process.platform === 'win32' ? 'git.exe' : 'git';
     expect(execFileMock).toHaveBeenNthCalledWith(
       1,
-      'git',
+      gitCmd,
       [
         'clone',
         'https://github.com/vmoranv/jshook_plugin_ida_bridge',
