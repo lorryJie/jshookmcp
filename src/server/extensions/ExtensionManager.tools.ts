@@ -3,7 +3,7 @@ import type { MCPServerContext } from '@server/MCPServer.context';
 import type { ToolProfileId } from '@server/registry/contracts';
 import type { ExtensionToolRecord } from '@server/extensions/types';
 
-const DEFAULT_EXTENSION_PROFILES: readonly ToolProfileId[] = ['full'];
+const DEFAULT_EXTENSION_PROFILES: readonly ToolProfileId[] = ['search', 'workflow', 'full'];
 
 function resolveExtensionToolProfiles(
   record: Pick<ExtensionToolRecord, 'profiles'>,
