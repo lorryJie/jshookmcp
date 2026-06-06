@@ -2,11 +2,14 @@
 
 > MCP server with 38 domains, 439 tools for AI-assisted JavaScript analysis — browser automation, CDP debugging, network monitoring, JS hooks, deobfuscation, and workflow orchestration.
 >
-> **Generated**: 2026-05-31 | **Version**: 0.3.2 | **License**: AGPL-3.0-only
+> **Generated**: 2026-06-06 | **Version**: 0.3.3 | **License**: AGPL-3.0-only
 
 ---
 
 ## Changelog
+
+### 2026-06-06 — Version 0.3.3
+- **fix(deps)**: bump `hono` override `>=4.12.18` → `>=4.12.21` (Dependabot #57-#60), closing four medium-severity advisories reachable transitively via `@modelcontextprotocol/sdk` (HTTP transport): CVE-2026-47673 / GHSA-f577-qrjj-4474 (JWT middleware accepts any Authorization scheme), CVE-2026-47674 / GHSA-xrhx-7g5j-rcj5 (IP restriction bypass for non-canonical IPv6), CVE-2026-47676 / GHSA-2gcr-mfcq-wcc3 (`app.mount()` strips prefix from undecoded path), CVE-2026-47675 / GHSA-3hrh-pfw6-9m5x (cookie helper Set-Cookie injection). Lockfile re-resolves `hono` to 4.12.23. New `tests/contracts/security-overrides.test.ts` guards both the `package.json` override floor and every resolved lockfile instance at ≥ 4.12.21 so the pin cannot silently regress.
 
 ### 2026-05-31 — Merge binary-secrets + apk-packer into binary-instrument
 - **refactor(binary-instrument)**: absorbed `binary-secrets` (1 tool: `binary_key_extract`) and `apk-packer` (3 tools: `apk_packer_detect`, `apk_packer_list_signatures`, `apk_signing_block_parse`) into `binary-instrument` as sub-domains. Both former standalone domains removed. Domain count 40 → 38; tool count unchanged (4 tools moved, not removed). `binary-instrument` manifest gains `secondaryDepKeys: ['apkPackerHandlers', 'binarySecretsHandlers']`. Source files moved to `binary-instrument/secrets/` and `binary-instrument/apk-packer/`; test files moved accordingly; `MCPServer.context.ts` type imports and `MCPServer.ts` DOMAIN_INSTANCE_KEYS updated.
