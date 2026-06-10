@@ -29,6 +29,7 @@ const registrations = defineMethodRegistrations<
     { tool: 'js_bundle_search', method: 'handleJsBundleSearch' },
     { tool: 'list_extension_workflows', method: 'handleListExtensionWorkflows' },
     { tool: 'run_extension_workflow', method: 'handleRunExtensionWorkflow' },
+    { tool: 'reverse_session', method: 'handleReverseSession', profiles: ['full'] },
   ],
 });
 const macroRegistrations = defineMethodRegistrations<M, (typeof macroTools)[number]['name']>({
@@ -76,10 +77,21 @@ const manifest = {
   ensure,
 
   workflowRule: {
-    patterns: [/(workflow|extension|run|macro)/i, /(工作流|扩展|运行|宏)/i],
+    patterns: [
+      /(workflow|extension|run|macro)/i,
+      /(工作流|扩展|运行|宏)/i,
+      /(reverse|re).*(session|workflow|pipeline|full.?chain|托管|全链路)/i,
+      /(android|apk|dex|frida|adb).*(dump|intake|artifact|session)/i,
+    ],
     priority: 95,
-    tools: ['run_extension_workflow', 'list_extension_workflows', 'run_macro', 'list_macros'],
-    hint: 'Workflow & macros: list workflows → run workflow; or list macros → run macro',
+    tools: [
+      'run_extension_workflow',
+      'list_extension_workflows',
+      'run_macro',
+      'list_macros',
+      'reverse_session',
+    ],
+    hint: 'Workflow & macros: list workflows → run workflow; list macros → run macro; reverse_session creates recoverable full-chain reverse evidence workflows.',
   },
 
   prerequisites: {

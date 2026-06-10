@@ -290,6 +290,36 @@ describe('WorkflowHandlers', () => {
     expect(body.stepResults['demo-node']).toBeDefined();
   });
 
+  it('runs reverse_session through the workflow server context executor', async () => {
+    (deps.serverContext.executeToolWithTracking as any).mockResolvedValue({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ success: true, artifact: { kind: 'apk-intake' } }),
+        },
+      ],
+    });
+
+    const created = parseJson<any>(
+      await handlers.handleReverseSession({
+        action: 'create',
+        apkPath: 'C:/samples/app.apk',
+      }),
+    );
+    const run = parseJson<any>(
+      await handlers.handleReverseSession({
+        action: 'run',
+        sessionId: created.session.sessionId,
+        maxSteps: 1,
+      }),
+    );
+
+    expect(run.success).toBe(true);
+    expect(deps.serverContext.executeToolWithTracking).toHaveBeenCalledWith('apk_dex_intake', {
+      apkPath: 'C:/samples/app.apk',
+    });
+  });
+
   it('keeps https bundle fetches on hostname to preserve TLS validation', async () => {
     mockLookup.mockResolvedValue({ address: buildReservedDocIpv4(), family: 4 });
     fetchMock.mockResolvedValue({

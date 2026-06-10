@@ -48,6 +48,9 @@ describe('Workflow Domain Manifest', () => {
     vi.spyOn(WorkflowHandlers.prototype, 'handleRunExtensionWorkflow').mockResolvedValue(
       undefined as any,
     );
+    vi.spyOn(WorkflowHandlers.prototype, 'handleReverseSession').mockResolvedValue(
+      undefined as any,
+    );
     vi.spyOn(MacroToolHandlers.prototype, 'handleRunMacro').mockResolvedValue(undefined as any);
     vi.spyOn(MacroToolHandlers.prototype, 'handleListMacros').mockResolvedValue(undefined as any);
 
@@ -97,6 +100,7 @@ describe('Workflow Domain Manifest', () => {
           js_bundle_search: 'handleJsBundleSearch',
           list_extension_workflows: 'handleListExtensionWorkflows',
           run_extension_workflow: 'handleRunExtensionWorkflow',
+          reverse_session: 'handleReverseSession',
           run_macro: 'handleRunMacro',
           list_macros: 'handleListMacros',
         };
@@ -123,5 +127,16 @@ describe('Workflow Domain Manifest', () => {
         }
       }
     });
+  });
+
+  it('keeps reverse_session exposed through workflow as a full-only registration', () => {
+    const reverseRegistration = manifest.registrations.find(
+      (registration) => registration.tool.name === 'reverse_session',
+    );
+
+    expect(workflowToolDefinitions.map((tool) => tool.name)).toContain('reverse_session');
+    expect(reverseRegistration?.profiles).toEqual(['full']);
+    expect(manifest.workflowRule?.tools).toContain('reverse_session');
+    expect(manifest.domain).toBe('workflow');
   });
 });
