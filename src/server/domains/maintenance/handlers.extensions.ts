@@ -16,11 +16,11 @@ import {
   findRegistryEntryBySlug,
   getRegistryBaseUrl,
   resolveDefaultExtensionRoot,
+  assertPublishedExtensionSdkDependency,
   resolveExtensionEntryFile,
   resolveExtensionProjectDir,
   resolveInstalledRuntimeEntry,
   resolvePackageManager,
-  rewriteLocalExtensionSdkDependency,
   serializeRegistryFetchError,
   writeInstalledExtensionMetadata,
 } from './handlers/extension-registry-utils';
@@ -147,16 +147,17 @@ export class ExtensionManagementHandlers {
 
       await mkdir(dirname(installDir), { recursive: true });
 
-      await execFileAsync('git', ['clone', entry.source.repo, installDir], {
+      const gitCmd = process.platform === 'win32' ? 'git.exe' : 'git';
+      await execFileAsync(gitCmd, ['clone', entry.source.repo, installDir], {
         timeout: EXTENSION_GIT_CLONE_TIMEOUT_MS,
       });
-      await execFileAsync('git', ['-C', installDir, 'checkout', entry.source.commit], {
+      await execFileAsync(gitCmd, ['-C', installDir, 'checkout', entry.source.commit], {
         timeout: EXTENSION_GIT_CHECKOUT_TIMEOUT_MS,
       });
 
       const packageJsonPath = resolve(projectDir, 'package.json');
       if (existsSync(packageJsonPath)) {
-        await rewriteLocalExtensionSdkDependency(projectDir);
+        await assertPublishedExtensionSdkDependency(projectDir);
         const packageManager = await resolvePackageManager(projectDir);
         const installArgs =
           packageManager === 'pnpm'

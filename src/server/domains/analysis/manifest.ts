@@ -224,6 +224,31 @@ const manifest = {
       domain: DOMAIN,
       bind: b((h, a) => h.handleJsSolveConstraints(a)),
     },
+    {
+      tool: t('analysis_ast_match'),
+      domain: DOMAIN,
+      bind: b((h, a) => h.handleAnalysisAstMatch(a)),
+    },
+    {
+      tool: t('analysis_deflat_control_flow'),
+      domain: DOMAIN,
+      bind: b((h, a) => h.handleAnalysisDeflatControlFlow(a)),
+    },
+    {
+      tool: t('analysis_decode_string_array'),
+      domain: DOMAIN,
+      bind: b((h, a) => h.handleAnalysisDecodeStringArray(a)),
+    },
+    {
+      tool: t('js_symbolic_execute'),
+      domain: DOMAIN,
+      bind: b((h, a) => h.handleJsSymbolicExecute(a)),
+    },
+    {
+      tool: t('js_symbolic_execute_jsvmp'),
+      domain: DOMAIN,
+      bind: b((h, a) => h.handleJsSymbolicExecuteJsvmp(a)),
+    },
   ],
 } satisfies DomainManifest<typeof DEP_KEY, H, typeof DOMAIN>;
 

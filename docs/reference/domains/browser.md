@@ -1,4 +1,4 @@
-# Browser
+# 浏览器
 
 域名：`browser`
 
@@ -18,20 +18,21 @@
 ## 常见组合
 
 - browser + network
-- browser + hooks
+- browser + instrumentation
 - browser + workflow
 
-## 工具清单（60）
+## 工具清单（64）
 
 | 工具 | 说明 |
 | --- | --- |
 | `get_detailed_data` | 获取之前因数据量过大而被截断的完整内容。 |
+| `get_offloaded_data` | 取回此前卸载到磁盘的字段的原始字节（见占位符里的 `_offload.path`）。二进制大块（如解码后的 `data:` URI）默认以 base64 返回；文本用 encoding="utf8"。 |
 | `browser_attach` | 通过 CDP 连接到一个正在运行的浏览器。 |
 | `browser_list_tabs` | 列出浏览器中所有打开的标签页。 |
 | `browser_list_cdp_targets` | 列出当前已连接浏览器目标可见的所有 CDP 目标。 |
 | `browser_select_tab` | 切换到指定的标签页，可按索引、URL 或标题模式匹配。 |
 | `browser_attach_cdp_target` | 连接到浏览器中的特定目标，如某个 iframe 或 Worker。 |
-| `browser_detach_cdp_target` | 断开当前已附加的底层 CDP 目标会话，并将 network/hooks 恢复为常规页面绑定。 |
+| `browser_detach_cdp_target` | 断开当前已附加的底层 CDP 目标会话，并恢复为常规页面绑定。 |
 | `browser_evaluate_cdp_target` | 在当前已附加的 CDP 目标会话中执行 JavaScript。 |
 | `browser_launch` | 启动浏览器。 |
 | `browser_close` | 关闭浏览器。 |
@@ -40,6 +41,7 @@
 | `page_reload` | 重新加载当前页面。 |
 | `page_back` | 后退到上一个页面。 |
 | `page_forward` | 前进到下一个页面。 |
+| `page_list_frames` | 列出页面中所有框架（iframe），返回 frameId、父框架、跨域标记等元数据。 |
 | `page_click` | 点击页面上的元素。 |
 | `page_type` | 在输入框中输入文字。 |
 | `page_upload_files` | 向 &lt;input type="file"&gt; 元素上传一个或多个本地文件。 |
@@ -74,6 +76,8 @@
 | `indexeddb_dump` | 导出所有 IndexedDB 数据库及其内容，便于分析 PWA 数据、令牌或离线状态。 |
 | `js_heap_search` | 在浏览器 JavaScript 堆中检索匹配模式的字符串值，用于定位 token、密钥、签名等敏感数据。 |
 | `tab_workflow` | 多标签页协同操作，支持跨标签页传递数据。 |
+| `browser_codegen_start` | 开始录制浏览器操作，将页面交互转化为可回放的步骤序列。 |
+| `browser_codegen_stop` | 停止录制浏览器操作，返回经过清洗和合并的可回放步骤列表。 |
 | `human_mouse` | 模拟真人移动鼠标，带随机轨迹和抖动。 |
 | `human_scroll` | 模拟真人滚动页面，带变速和停顿。 |
 | `human_typing` | 模拟真人打字，带变速和偶尔打错再修正。 |

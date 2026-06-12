@@ -1,5 +1,6 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { tool } from '@server/registry/tool-builder';
+import { getReverseEngineeringConfig } from '@utils/reverseEngineeringConfig';
 
 const workflowNetworkPolicySchema = {
   type: 'object',
@@ -40,6 +41,8 @@ const workflowNetworkPolicySchema = {
     'Request-level network authorization policy. Use this instead of process-wide bypasses when you need to reach' +
     ' a real lab target, private address, or plain HTTP service.',
 } as const;
+
+const reverseSessionConfig = getReverseEngineeringConfig().reverseSession;
 
 export const workflowToolDefinitions: Tool[] = [
   tool('js_bundle_search', (t) =>
@@ -173,5 +176,28 @@ export const workflowToolDefinitions: Tool[] = [
       })
       .number('timeoutMs', 'Optional override for total workflow timeout in milliseconds')
       .requiredOpenWorld('workflowId'),
+  ),
+  tool('reverse_session', (t) =>
+    t
+      .desc(
+        'Create, inspect, list, preview, or run an end-to-end reverse-engineering workflow session with artifact root, cross-domain tool calls, and evidence refs.',
+      )
+      .string('action', 'Action: create, status, list, plan, or run. Defaults to create.')
+      .string('platform', 'Target platform: android, native, web, or unknown.')
+      .string('packageName', 'Android package/process name.')
+      .string('apkPath', 'Local APK path for APK/DEX intake.')
+      .number('pid', 'Runtime process id when known.')
+      .string('artifactRoot', 'Optional artifact root directory for planned outputs.')
+      .string('sessionId', 'Session id for action=status or action=run.')
+      .number('maxSteps', 'Maximum ready/planned steps to execute during action=run.', {
+        default: reverseSessionConfig.runMaxSteps,
+      })
+      .boolean('stopOnError', 'Stop action=run after the first failed tool result.', {
+        default: true,
+      })
+      .boolean('includeResults', 'Include parsed tool results in action=run execution records.', {
+        default: false,
+      })
+      .query(),
   ),
 ];

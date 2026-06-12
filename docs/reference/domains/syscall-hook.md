@@ -1,4 +1,4 @@
-# Syscall Hook
+# 系统调用挂钩
 
 域名：`syscall-hook`
 
@@ -17,7 +17,7 @@
 ## 常见组合
 
 - syscall-hook + process
-- syscall-hook + hooks
+- syscall-hook + instrumentation
 
 ## 工具清单（7）
 

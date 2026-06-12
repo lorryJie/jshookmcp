@@ -19,6 +19,7 @@ import {
   SCAN_UNKNOWN_INITIAL_MAX_ADDRESSES,
   SCAN_POINTER_MAX_RESULTS,
   SCAN_GROUP_MAX_PATTERN_SIZE,
+  USERSPACE_MAX_ADDRESS,
 } from '@src/constants';
 import type { NativeMemoryManager } from './NativeMemoryManager.impl';
 import { nativeMemoryManager } from './NativeMemoryManager.impl';
@@ -30,6 +31,7 @@ import { createPlatformProvider } from './platform/factory.js';
 import type { PlatformMemoryAPI } from './platform/PlatformMemoryAPI.js';
 import type { ProcessHandle } from './platform/types.js';
 import { formatAddress, parseAddress } from './formatAddress';
+import { ToolError } from '@errors/ToolError';
 
 export interface ScanResult {
   sessionId: string;
@@ -78,7 +80,7 @@ export class MemoryScanner {
 
     const { patternBytes } = parsePattern(value, valueType === 'pointer' ? 'uint64' : valueType);
     if (patternBytes.length === 0) {
-      throw new Error(`Invalid pattern for type ${valueType}: "${value}"`);
+      throw new ToolError('VALIDATION', `Invalid pattern for type ${valueType}: "${value}"`);
     }
 
     const targetBuf = Buffer.from(patternBytes);
@@ -181,7 +183,10 @@ export class MemoryScanner {
     const valueSize = getValueSize(valueType);
 
     if (valueSize === 0) {
-      throw new Error('Next-scan is not supported for variable-length types (hex/string)');
+      throw new ToolError(
+        'VALIDATION',
+        'Next-scan is not supported for variable-length types (hex/string)',
+      );
     }
 
     // Parse target values if provided
@@ -249,7 +254,10 @@ export class MemoryScanner {
     const maxAddresses = options.maxResults ?? SCAN_UNKNOWN_INITIAL_MAX_ADDRESSES;
 
     if (valueSize === 0) {
-      throw new Error('Unknown initial scan is not supported for variable-length types');
+      throw new ToolError(
+        'VALIDATION',
+        'Unknown initial scan is not supported for variable-length types',
+      );
     }
 
     const sessionId = scanSessionManager.createSession(pid, options);
@@ -349,11 +357,6 @@ export class MemoryScanner {
       const regions = this.getFilteredRegions(handle, scanOptions);
 
       for (const region of regions) {
-        if (options.moduleOnly /* unused cast */) {
-        }
-        // Use scanOptions for onProgress if we added it, but wait, pointerScan doesn't accept onProgress yet in its
-        // options!
-        // We'll update pointerScan options separately if needed. For now just loop:
         if (pointers.length >= maxResults) break;
 
         const regionBase = region.baseAddress;
@@ -427,13 +430,14 @@ export class MemoryScanner {
     const start = performance.now();
 
     if (pattern.length === 0) {
-      throw new Error('Group scan requires at least one value pattern');
+      throw new ToolError('VALIDATION', 'Group scan requires at least one value pattern');
     }
 
     // Calculate total pattern size
     const maxOffset = Math.max(...pattern.map((p) => p.offset + getValueSize(p.type)));
     if (maxOffset > SCAN_GROUP_MAX_PATTERN_SIZE) {
-      throw new Error(
+      throw new ToolError(
+        'VALIDATION',
         `Group pattern too large: ${maxOffset} bytes (max ${SCAN_GROUP_MAX_PATTERN_SIZE})`,
       );
     }
@@ -549,13 +553,13 @@ export class MemoryScanner {
     options: ScanOptions,
   ): Promise<ScanResult> {
     const start = performance.now();
-    const patternType = (valueType === 'pointer' ? 'uint64' : valueType) as Parameters<
-      typeof this.nmm.scanMemory
-    >[2];
+    // Only variable-length types (size 0) reach this path: 'hex' and 'string'.
+    // 'string' is scanned as a byte/hex pattern by the underlying engine.
+    const patternType: 'hex' | 'string' = valueType === 'hex' ? 'hex' : 'string';
     const result = await this.nmm.scanMemory(pid, value, patternType);
 
     if (!result.success) {
-      throw new Error(result.error ?? 'Scan failed');
+      throw new ToolError('RUNTIME', result.error ?? 'Scan failed');
     }
 
     const sessionId = scanSessionManager.createSession(pid, options);
@@ -585,7 +589,7 @@ export class MemoryScanner {
   ): Array<{ baseAddress: bigint; size: number }> {
     const regions: Array<{ baseAddress: bigint; size: number }> = [];
     let address = 0n;
-    const maxAddress = BigInt('0x7FFFFFFF0000');
+    const maxAddress = USERSPACE_MAX_ADDRESS;
     const filter = options.regionFilter;
 
     while (address < maxAddress) {

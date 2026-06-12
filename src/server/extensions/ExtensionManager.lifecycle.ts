@@ -2,9 +2,13 @@
  * Extension lifecycle helpers — import, cleanup, config extraction, list building.
  */
 import { pathToFileURL } from 'node:url';
+import { clearDomainTtl } from '@server/MCPServer.activation.ttl';
 import { logger } from '@utils/logger';
 import type { MCPServerContext } from '@server/MCPServer.context';
 import type { ExtensionListResult } from '@server/extensions/types';
+import type { ToolProfileId } from '@server/registry/contracts';
+import { unregisterExtensionToolRecord } from '@server/extensions/ExtensionManager.tools';
+import { shouldAutoRegisterExtensionTool } from '@server/extensions/ExtensionManager.tools';
 
 export function extractConfigValue<T = unknown>(
   ctx: MCPServerContext,
@@ -29,6 +33,7 @@ export function createFreshImportUrl(modulePath: string, kind: 'plugin' | 'workf
 
 export async function clearLoadedExtensionTools(ctx: MCPServerContext): Promise<number> {
   let removed = 0;
+  const extensionDomains = new Set<string>();
 
   for (const [pluginId, runtime] of ctx.extensionPluginRuntimeById.entries()) {
     try {
@@ -49,15 +54,20 @@ export async function clearLoadedExtensionTools(ctx: MCPServerContext): Promise<
   }
 
   for (const record of ctx.extensionToolsByName.values()) {
+    extensionDomains.add(record.domain);
     try {
-      record.registeredTool?.remove();
+      unregisterExtensionToolRecord(ctx, record, {
+        onRemoveError: (error) => {
+          logger.warn(`Failed to remove extension tool "${record.name}":`, error);
+        },
+      });
     } catch (error) {
       logger.warn(`Failed to remove extension tool "${record.name}":`, error);
     }
-    ctx.router.removeHandler(record.name);
-    ctx.activatedToolNames.delete(record.name);
-    ctx.activatedRegisteredTools.delete(record.name);
     removed++;
+  }
+  for (const domain of extensionDomains) {
+    clearDomainTtl(ctx, domain);
   }
   ctx.extensionToolsByName.clear();
   ctx.extensionPluginsById.clear();
@@ -72,19 +82,30 @@ export function buildListResult(
   pluginRoots: string[],
   workflowRoots: string[],
 ): ExtensionListResult {
+  const defaultProfiles: readonly ToolProfileId[] = ['full'];
+  const tools = [...ctx.extensionToolsByName.values()].map((record) => ({
+    name: record.name,
+    domain: record.domain,
+    source: record.source,
+    profiles:
+      record.profiles && record.profiles.length > 0 ? [...record.profiles] : defaultProfiles,
+    visibleInCurrentProfile: shouldAutoRegisterExtensionTool(ctx.baseTier, record),
+    active: ctx.activatedToolNames.has(record.name),
+    activationSource: record.activationSource,
+    activatedAt: record.activatedAt,
+  }));
+
   return {
     pluginRoots,
     workflowRoots,
     pluginCount: ctx.extensionPluginsById.size,
     workflowCount: ctx.extensionWorkflowsById.size,
     toolCount: ctx.extensionToolsByName.size,
+    activeToolCount: tools.filter((tool) => tool.active).length,
+    currentProfile: ctx.baseTier,
     lastReloadAt: ctx.lastExtensionReloadAt,
     plugins: [...ctx.extensionPluginsById.values()],
     workflows: [...ctx.extensionWorkflowsById.values()],
-    tools: [...ctx.extensionToolsByName.values()].map((record) => ({
-      name: record.name,
-      domain: record.domain,
-      source: record.source,
-    })),
+    tools,
   };
 }

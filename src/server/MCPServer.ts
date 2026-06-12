@@ -15,6 +15,7 @@ import type { ToolProfile } from '@server/ToolCatalog';
 import { getToolDomain } from '@server/ToolCatalog';
 import { ToolExecutionRouter } from '@server/ToolExecutionRouter';
 import { ToolCallContextGuard } from '@server/ToolCallContextGuard';
+import { ToolCircuitBreaker } from '@server/security/ToolCircuitBreaker';
 import { LargeDataOffloader } from '@server/ToolResponseOffloader';
 import { createToolHandlerMap } from '@server/ToolHandlerMap';
 import type { ToolArgs } from '@server/types';
@@ -24,7 +25,11 @@ import { getLoaderMetadata } from '@server/registry/discovery';
 import { refreshDomainTtlForTool } from '@server/MCPServer.activation.ttl';
 import type { DomainTtlEntry } from '@server/MCPServer.activation.ttl';
 import { closeServer, startHttpTransport, startStdioTransport } from '@server/MCPServer.transport';
+import { McpLogTransport } from '@server/transport/McpLogTransport';
+import type { McpLogLevel } from '@server/transport/McpLogTransport';
+import { MCP_LOG_ENABLED, MCP_LOG_FILE_DIR, MCP_LOG_LEVEL } from '@src/constants';
 import { ActivationController } from '@server/activation/ActivationController';
+import { SearchQualityTracker } from '@server/search/SearchQualityTracker';
 import { registerSingleTool as registerSingleToolImpl } from '@server/MCPServer.tools';
 import { registerSearchMetaTools } from '@server/MCPServer.search';
 import { registerServerResources } from '@server/MCPServer.resources';
@@ -36,6 +41,12 @@ import {
   RuntimeSnapshotScheduler,
   getStateDir,
 } from '@server/persistence/RuntimeSnapshotScheduler';
+import {
+  ServerRuntimeState,
+  restorePendingDomainActivations,
+} from '@server/runtime/ServerRuntimeState';
+import { BrowserSessionCoordinator } from '@server/runtime/BrowserSessionCoordinator';
+import { parseBrowserSessionSnapshot } from '@server/runtime/BrowserSessionCoordinator';
 import type { ToolHandlerDeps } from '@server/registry/contracts';
 import type {
   ExtensionListResult,
@@ -182,6 +193,9 @@ export class MCPServer implements MCPServerContext {
   public enabledDomains: Set<string>;
   public readonly router: ToolExecutionRouter;
   public readonly contextGuard: ToolCallContextGuard;
+  public readonly circuitBreaker = new ToolCircuitBreaker();
+  private readonly circuitBrokenTools = new Set<string>();
+  private readonly searchQualityTracker = new SearchQualityTracker();
   /** Offloads large response data (>512KB) to disk / DetailedDataManager to keep context lean. */
   public readonly largeDataOffloader: LargeDataOffloader;
   public readonly handlerDeps: ToolHandlerDeps;
@@ -193,6 +207,8 @@ export class MCPServer implements MCPServerContext {
   private clientInitialized = false;
   private cacheAdaptersRegistered = false;
   private cacheRegistrationPromise?: Promise<void>;
+  /** Structured log transport for MCP `notifications/message`. */
+  public readonly mcpLog = new McpLogTransport();
   public readonly baseTier: ToolProfile;
   public readonly activatedToolNames = new Set<string>();
   public readonly activatedRegisteredTools = new Map<string, RegisteredTool>();
@@ -247,10 +263,16 @@ export class MCPServer implements MCPServerContext {
     | import('@server/domains/boringssl-inspector/handlers').BoringsslInspectorHandlers
     | undefined;
   declare skiaCaptureHandlers:
-    | import('@server/domains/skia-capture/handlers').SkiaCaptureHandlers
+    | import('@server/domains/canvas/skia').SkiaCaptureHandlers
     | undefined;
   declare binaryInstrumentHandlers:
     | import('@server/domains/binary-instrument/handlers').BinaryInstrumentHandlers
+    | undefined;
+  declare binarySecretsHandlers:
+    | import('@server/domains/binary-instrument/secrets/handlers').BinarySecretsHandlers
+    | undefined;
+  declare apkPackerHandlers:
+    | import('@server/domains/binary-instrument/apk-packer/handlers').ApkPackerHandlers
     | undefined;
   declare adbBridgeHandlers:
     | import('@server/domains/adb-bridge/handlers').ADBBridgeHandlers
@@ -274,9 +296,11 @@ export class MCPServer implements MCPServerContext {
   declare advancedHandlers:
     | import('@server/domains/network/index').AdvancedToolHandlers
     | undefined;
-  declare aiHookHandlers: import('@server/domains/hooks/index').AIHookToolHandlers | undefined;
+  declare aiHookHandlers:
+    | import('@server/domains/instrumentation/hooks/ai-handlers').AIHookToolHandlers
+    | undefined;
   declare hookPresetHandlers:
-    | import('@server/domains/hooks/index').HookPresetToolHandlers
+    | import('@server/domains/instrumentation/hooks/preset-handlers').HookPresetToolHandlers
     | undefined;
   declare deobfuscator: import('@modules/deobfuscator/Deobfuscator').Deobfuscator | undefined;
   declare advancedDeobfuscator:
@@ -308,7 +332,7 @@ export class MCPServer implements MCPServerContext {
     | import('@server/domains/encoding/index').EncodingToolHandlers
     | undefined;
   declare antidebugHandlers:
-    | import('@server/domains/antidebug/index').AntiDebugToolHandlers
+    | import('@server/domains/debugger/antidebug/index').AntiDebugToolHandlers
     | undefined;
   declare graphqlHandlers: import('@server/domains/graphql/index').GraphQLToolHandlers | undefined;
   declare platformHandlers:
@@ -323,7 +347,9 @@ export class MCPServer implements MCPServerContext {
   declare coordinationHandlers:
     | import('@server/domains/coordination/index').CoordinationHandlers
     | undefined;
-  declare evidenceHandlers: import('@server/domains/evidence/index').EvidenceHandlers | undefined;
+  declare evidenceHandlers:
+    | import('@server/domains/instrumentation/evidence/handlers').EvidenceHandlers
+    | undefined;
   declare instrumentationHandlers:
     | import('@server/domains/instrumentation/index').InstrumentationHandlers
     | undefined;
@@ -442,6 +468,25 @@ export class MCPServer implements MCPServerContext {
       },
     );
 
+    // Attach structured MCP log transport
+    this.mcpLog.attach(this.server, MCP_LOG_ENABLED);
+    const validLevels = new Set<string>(['debug', 'info', 'warning', 'error']);
+    if (validLevels.has(MCP_LOG_LEVEL)) {
+      this.mcpLog.setLevel(MCP_LOG_LEVEL as McpLogLevel);
+    }
+    if (MCP_LOG_FILE_DIR) {
+      this.mcpLog.enableFileLogging(MCP_LOG_FILE_DIR);
+    }
+
+    // Circuit breaker: deactivate blocked tools so the model won't attempt them
+    this.circuitBreaker.onChange((event, toolName) => {
+      if (event === 'opened') {
+        this.circuitBreakerDeactivate(toolName);
+      } else {
+        this.circuitBreakerReactivate(toolName);
+      }
+    });
+
     // Forward structured logs to the MCP client (only after initialize handshake)
     this.server.server.oninitialized = () => {
       this.clientInitialized = true;
@@ -475,11 +520,21 @@ export class MCPServer implements MCPServerContext {
     this.setDomainInstance('activationController', new ActivationController(this.eventBus, this));
 
     // Snapshot scheduler for StateBoard + EvidenceGraph persistence
-    const stateDir = getStateDir(process.cwd());
+    const stateDir = getStateDir();
     const snapshotScheduler = new RuntimeSnapshotScheduler();
+    const runtimeState = new ServerRuntimeState();
+    const browserSessionCoordinator = new BrowserSessionCoordinator(() => this.collector);
     this.setDomainInstance('snapshotScheduler', snapshotScheduler);
     this.setDomainInstance('snapshotStateDir', stateDir);
-    snapshotScheduler.start().catch((err) => logger.warn('snapshot scheduler start failed:', err));
+    this.setDomainInstance('serverRuntimeState', runtimeState);
+    this.setDomainInstance('browserSessionCoordinator', browserSessionCoordinator);
+    snapshotScheduler.register(`${stateDir}/runtime-state.json`, runtimeState);
+    snapshotScheduler
+      .start()
+      .then(async () => {
+        await restorePendingDomainActivations(this);
+      })
+      .catch((err) => logger.warn('snapshot scheduler start failed:', err));
 
     this.eventBus.on('tool:progress', async (payload) => {
       try {
@@ -502,6 +557,14 @@ export class MCPServer implements MCPServerContext {
       } catch {
         // Swallow resource updated notification errors
       }
+    });
+
+    this.eventBus.on('activation:domain_pruned', (payload) => {
+      this.mcpLog.info('jshookmcp', {
+        event: 'domain_pruned',
+        domain: payload.domain,
+        reason: payload.reason,
+      });
     });
 
     this.server.server.setRequestHandler(CompleteRequestSchema, async (request) => {
@@ -595,6 +658,7 @@ export class MCPServer implements MCPServerContext {
     const executionCpuStart = collectExecutionMetrics ? process.cpuUsage() : null;
     const executionMemoryBefore = collectExecutionMetrics ? captureExecutionMetricMemory() : null;
     try {
+      this.setDomainInstance('activeToolArgs', args);
       timeoutTimer = setTimeout(() => {
         try {
           const safeArgs = JSON.stringify(args).slice(0, 500);
@@ -607,9 +671,43 @@ export class MCPServer implements MCPServerContext {
       }, timeoutMs);
       timeoutTimer.unref();
 
+      if (this.circuitBreaker.shouldBlock(name)) {
+        const state = this.circuitBreaker.getState(name);
+        const retryAfter = state
+          ? Math.ceil(
+              (this.circuitBreaker.getRecoveryMs() - (Date.now() - state.lastFailureTime)) / 1000,
+            )
+          : 30;
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                success: false,
+                error: `Circuit breaker open for tool "${name}"`,
+                reason: `Tool has failed consecutively ${state?.failureCount ?? 0} times`,
+                retryAfterSeconds: retryAfter,
+              }),
+            },
+          ],
+          isError: true,
+        };
+      }
+
       let response;
       try {
-        response = await this.router.execute(name, args);
+        const browserCoordinator =
+          getToolDomain(name) === 'browser'
+            ? this.getDomainInstance<BrowserSessionCoordinator>('browserSessionCoordinator')
+            : null;
+        const sessionId = (args['_meta'] as { sessionId?: string } | undefined)?.sessionId ?? null;
+        response = browserCoordinator
+          ? await browserCoordinator.runExclusive(sessionId, async () => {
+              await browserCoordinator.restoreSessionContext(sessionId);
+              return await this.router.execute(name, args);
+            })
+          : await this.router.execute(name, args);
       } finally {
         if (timeoutTimer) clearTimeout(timeoutTimer);
       }
@@ -618,8 +716,17 @@ export class MCPServer implements MCPServerContext {
       // to prevent context bloat while preserving data for later retrieval.
       this.largeDataOffloader.offload(name, response);
 
+      if (getToolDomain(name) === 'browser') {
+        const browserCoordinator = this.getDomainInstance<BrowserSessionCoordinator>(
+          'browserSessionCoordinator',
+        );
+        const sessionId = (args['_meta'] as { sessionId?: string } | undefined)?.sessionId ?? null;
+        browserCoordinator?.noteToolResult(sessionId, name, parseBrowserSessionSnapshot(response));
+      }
+
       // Track consecutive tool calls for repeat loop detection
       this.contextGuard.recordCall(name);
+      this.getDomainInstance<ServerRuntimeState>('serverRuntimeState')?.recordToolCall(name, args);
       // Enrich context-sensitive tool responses with current tab metadata
       let enriched = this.contextGuard.enrichResponse(name, response);
       if (
@@ -648,12 +755,42 @@ export class MCPServer implements MCPServerContext {
       if (this.activatedToolNames.has(name)) {
         refreshDomainTtlForTool(this, name);
       }
+      let toolResultSuccess = !enriched.isError;
+      if (enriched?.structuredContent && typeof enriched.structuredContent === 'object') {
+        const resultPayload = enriched.structuredContent as Record<string, unknown>;
+        toolResultSuccess = resultPayload.success !== false;
+      } else if (enriched?.content?.[0]?.type === 'text' && 'text' in enriched.content[0]) {
+        try {
+          const parsed = JSON.parse(enriched.content[0].text) as Record<string, unknown>;
+          toolResultSuccess = parsed.success !== false;
+        } catch {
+          toolResultSuccess = !enriched.isError;
+        }
+      }
+      // Circuit breaker: record success or failure
+      if (toolResultSuccess) {
+        this.circuitBreaker.recordSuccess(name);
+      } else {
+        this.circuitBreaker.recordFailure(name);
+      }
       // Emit tool:called event for ActivationController
       void this.eventBus.emit('tool:called', {
         toolName: name,
         domain: getToolDomain(name) ?? null,
         timestamp: new Date().toISOString(),
-        success: true,
+        success: toolResultSuccess,
+        args,
+        result: {
+          success: toolResultSuccess,
+          isError: enriched.isError === true,
+        },
+      });
+      this.searchQualityTracker.associateLastSearch(name);
+      this.mcpLog.info('jshookmcp', {
+        event: 'tool_called',
+        toolName: name,
+        domain: getToolDomain(name) ?? null,
+        success: toolResultSuccess,
       });
       // Commit pending resource updates to prevent stream flooding
       this.getDomainInstance<import('@server/evidence/ReverseEvidenceGraph').ReverseEvidenceGraph>(
@@ -661,6 +798,7 @@ export class MCPServer implements MCPServerContext {
       )?.commit();
       return enriched;
     } catch (error) {
+      this.circuitBreaker.recordFailure(name);
       const errorResponse = asErrorResponse(error);
       try {
         this.tokenBudget.recordToolCall(name, args, errorResponse);
@@ -671,6 +809,8 @@ export class MCPServer implements MCPServerContext {
         'evidenceGraph',
       )?.commit();
       throw error;
+    } finally {
+      this.setDomainInstance('activeToolArgs', undefined);
     }
   }
 
@@ -682,6 +822,60 @@ export class MCPServer implements MCPServerContext {
     logger.warn(`Entering degraded mode: ${reason}`);
     this.tokenBudget.setTrackingEnabled(false);
     logger.setLevel('warn');
+  }
+
+  private circuitBreakerDeactivate(toolName: string): void {
+    if (this.circuitBrokenTools.has(toolName)) return;
+
+    const registeredTool = this.activatedRegisteredTools.get(toolName);
+    if (registeredTool) {
+      try {
+        registeredTool.remove();
+      } catch (e) {
+        logger.warn(`CircuitBreaker: failed to remove tool "${toolName}":`, e);
+        return;
+      }
+    } else if (!this.activatedToolNames.has(toolName)) {
+      return;
+    }
+
+    this.router.removeHandler(toolName);
+    this.activatedToolNames.delete(toolName);
+    this.activatedRegisteredTools.delete(toolName);
+    this.circuitBrokenTools.add(toolName);
+
+    const extRecord = this.extensionToolsByName.get(toolName);
+    if (extRecord) {
+      extRecord.registeredTool = undefined;
+    }
+
+    if (this.clientSupportsListChanged) {
+      void this.server.sendToolListChanged();
+    }
+
+    logger.info(`CircuitBreaker: deactivated "${toolName}" from tool list`);
+  }
+
+  private circuitBreakerReactivate(toolName: string): void {
+    if (!this.circuitBrokenTools.has(toolName)) return;
+    this.circuitBrokenTools.delete(toolName);
+
+    // Look up tool definition from selected tools (base tier) or registry
+    const toolDef = this.selectedTools.find((t) => t.name === toolName);
+    if (!toolDef) {
+      logger.warn(`CircuitBreaker: cannot reactivate "${toolName}" — no tool definition found`);
+      return;
+    }
+
+    const registration = this.registerSingleTool(toolDef);
+    this.activatedRegisteredTools.set(toolName, registration);
+    this.activatedToolNames.add(toolName);
+
+    if (this.clientSupportsListChanged) {
+      void this.server.sendToolListChanged();
+    }
+
+    logger.info(`CircuitBreaker: reactivated "${toolName}" in tool list`);
   }
 
   async start(): Promise<void> {
@@ -708,7 +902,15 @@ export class MCPServer implements MCPServerContext {
     registerSearchMetaTools(this);
     registerServerResources(this);
     registerServerPrompts(this);
-    logger.info(`Registered ${this.selectedTools.length} tools + meta tools with McpServer`);
+    const metaToolCount = this.metaToolsByName.size;
+    logger.info(
+      `Registered ${this.selectedTools.length} base tools + ${metaToolCount} meta tools with McpServer`,
+    );
+    this.mcpLog.info('jshookmcp', {
+      event: 'registry_discovered',
+      domainCount: this.enabledDomains.size,
+      toolCount: this.selectedTools.length,
+    });
   }
 }
 
@@ -731,6 +933,8 @@ const DOMAIN_INSTANCE_KEYS: ReadonlyArray<
   'boringsslInspectorHandlers',
   'skiaCaptureHandlers',
   'binaryInstrumentHandlers',
+  'binarySecretsHandlers',
+  'apkPackerHandlers',
   'adbBridgeHandlers',
   'mojoIpcHandlers',
   'syscallHookHandlers',
@@ -751,8 +955,10 @@ const DOMAIN_INSTANCE_KEYS: ReadonlyArray<
   'coreAnalysisHandlers',
   'coreMaintenanceHandlers',
   'extensionManagementHandlers',
+  'sandboxHandlers',
   'processHandlers',
   'workflowHandlers',
+  'macroHandlers',
   'wasmHandlers',
   'streamingHandlers',
   'encodingHandlers',
@@ -762,6 +968,7 @@ const DOMAIN_INSTANCE_KEYS: ReadonlyArray<
   'sourcemapHandlers',
   'transformHandlers',
   'coordinationHandlers',
+  'sharedStateBoardHandlers',
   'evidenceHandlers',
   'instrumentationHandlers',
 ];

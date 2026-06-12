@@ -1,4 +1,4 @@
-# Core
+# 核心
 
 域名：`core`
 
@@ -20,7 +20,7 @@
 - browser + network + core
 - core + sourcemap + transform
 
-## 工具清单（17）
+## 工具清单（22）
 
 | 工具 | 说明 |
 | --- | --- |
@@ -41,3 +41,8 @@
 | `js_deobfuscate_pipeline` | 三阶段反混淆管线：预处理 → 去混淆 → 可读化。 |
 | `js_analyze_vm` | 分析 JSVMP/VM 解释器结构：调度类型、handler 表、操作码映射。 |
 | `js_solve_constraints` | 求解混淆代码中的不透明谓词和常量表达式。 |
+| `analysis_ast_match` | 按 AST 节点类型和属性过滤器匹配代码中的节点，如查找所有 CallExpression。 |
+| `analysis_deflat_control_flow` | 将 switch-dispatcher 控制流平坦化还原为顺序执行的代码。 |
+| `analysis_decode_string_array` | 解码字面量字符串数组访问模式，将间接引用替换回内联字符串。 |
+| `js_symbolic_execute` | JavaScript 符号执行：探索所有可行执行路径，收集路径约束并求解。适用于控制流平坦化后的复杂分支代码分析。 |
+| `js_symbolic_execute_jsvmp` | JSVMP 字节码符号执行：逐步对指令进行符号执行，推断原始逻辑、约束和置信度。需先使用 js_analyze_vm 获取指令序列。 |

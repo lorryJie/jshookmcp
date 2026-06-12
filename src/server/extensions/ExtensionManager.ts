@@ -8,6 +8,7 @@
  *  - ExtensionManager.guards.ts      (type guards)
  *  - ExtensionManager.discovery.ts   (file scanning)
  *  - ExtensionManager.lifecycle.ts   (cleanup, config, list building)
+ *  - ExtensionManager.tools.ts       (extension tool registration helpers)
  */
 import type { MCPServerContext } from '@server/MCPServer.context';
 import { existsSync, readFileSync } from 'node:fs';
@@ -28,6 +29,7 @@ import type {
   ExtensionPluginRecord,
   ExtensionPluginRuntimeRecord,
   ExtensionReloadResult,
+  ExtensionToolRecord,
   ExtensionWorkflowRecord,
   ExtensionWorkflowRuntimeRecord,
 } from '@server/extensions/types';
@@ -53,6 +55,11 @@ import {
   clearLoadedExtensionTools,
   buildListResult,
 } from './ExtensionManager.lifecycle';
+import {
+  registerExtensionToolRecord,
+  shouldAutoRegisterExtensionTool,
+  unregisterExtensionToolRecord,
+} from './ExtensionManager.tools';
 
 export function listExtensions(ctx: MCPServerContext): ExtensionListResult {
   const pluginRoots = resolveRoots(parseRoots(process.env.MCP_PLUGIN_ROOTS, DEFAULT_PLUGIN_ROOTS));
@@ -86,6 +93,43 @@ function parseSimpleYaml(filePath: string): Record<string, string> {
   } catch {
     return {};
   }
+}
+
+interface ExtensionDisplayMetadata {
+  name?: string;
+  description?: string;
+  author?: string;
+  source_repo?: string;
+}
+
+type RawExtensionMetadata = Record<string, string>;
+
+function normalizeMetadataValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function readPluginMetadata(
+  pluginProjectRoot: string,
+  pluginId: string,
+  warnings: string[],
+): RawExtensionMetadata {
+  const metaYamlPath = join(pluginProjectRoot, 'meta.yaml');
+  if (!existsSync(metaYamlPath)) {
+    warnings.push(`Plugin "${pluginId}" is missing meta.yaml; outward metadata now lives there.`);
+    return {};
+  }
+
+  return parseSimpleYaml(metaYamlPath);
+}
+
+function toDisplayMetadata(meta: RawExtensionMetadata): ExtensionDisplayMetadata {
+  return {
+    name: normalizeMetadataValue(meta.name),
+    description: normalizeMetadataValue(meta.description),
+    author: normalizeMetadataValue(meta.author),
+    source_repo: normalizeMetadataValue(meta.source_repo),
+  };
 }
 
 function findInstalledMetadataRoot(startDir: string): string | null {
@@ -233,17 +277,19 @@ function registerWorkflowContract(
 
 function buildPluginRecord(
   plugin: ExtensionBuilder,
+  metadata: ExtensionDisplayMetadata,
   pluginFile: string,
   loadedTools: string[],
   loadedWorkflows: string[],
 ): ExtensionPluginRecord {
   return {
     id: plugin.id,
-    name: plugin.pluginName,
+    name: metadata.name ?? plugin.id,
+    description: metadata.description,
     source: pluginFile,
-    author: plugin.pluginAuthor || undefined,
-    sourceRepo: plugin.pluginSourceRepo || undefined,
-    domains: [],
+    author: metadata.author,
+    sourceRepo: metadata.source_repo,
+    domains: loadedTools.length > 0 ? [`plugin:${plugin.id}`] : [],
     workflows: loadedWorkflows,
     tools: loadedTools,
   };
@@ -300,9 +346,7 @@ async function loadPluginWorkflowContributions(
     }
 
     const pluginProjectRoot = resolvePluginProjectRoot(pluginFile);
-    const metaYamlPath = join(pluginProjectRoot, 'meta.yaml');
-    const meta = parseSimpleYaml(metaYamlPath);
-    plugin.mergeMetadata(meta);
+    const meta = readPluginMetadata(pluginProjectRoot, plugin.id, warnings);
 
     if (ctx.extensionPluginsById.has(plugin.id)) {
       warnings.push(`Skip plugin "${plugin.id}" from ${pluginFile}: duplicate plugin id`);
@@ -336,13 +380,11 @@ async function loadPluginWorkflowContributions(
       }
     }
 
-    if (loadedWorkflows.length === 0) {
-      continue;
-    }
+    const loadedTools = plugin.tools.map((t: ExtensionToolDefinition) => t.name);
 
     ctx.extensionPluginsById.set(
       plugin.id,
-      buildPluginRecord(plugin, pluginFile, [], loadedWorkflows),
+      buildPluginRecord(plugin, toDisplayMetadata(meta), pluginFile, loadedTools, loadedWorkflows),
     );
   }
 }
@@ -358,6 +400,7 @@ async function reloadExtensionsInner(ctx: MCPServerContext): Promise<ExtensionRe
     parseRoots(process.env.MCP_WORKFLOW_ROOTS, DEFAULT_WORKFLOW_ROOTS),
   );
   const allowedDigests = parseDigestAllowlist(process.env.MCP_PLUGIN_ALLOWED_DIGESTS);
+  let activatedOnReload = 0;
 
   // ── Critical security gate: pre-import trust boundary ──
   const strictLoad = isPluginStrictLoad();
@@ -371,9 +414,24 @@ async function reloadExtensionsInner(ctx: MCPServerContext): Promise<ExtensionRe
     const workflowFiles = await discoverWorkflowFiles(workflowRoots);
     await loadWorkflows(ctx, workflowFiles, warnings, errors);
 
+    if (removedTools > 0) {
+      try {
+        await ctx.server.sendToolListChanged();
+      } catch (error) {
+        logger.warn('sendToolListChanged failed after extension reload:', error);
+      }
+    }
+
     ctx.lastExtensionReloadAt = new Date().toISOString();
     const list = buildListResult(ctx, pluginRoots, workflowRoots);
-    return { ...list, addedTools: 0, removedTools, warnings, errors };
+    return {
+      ...list,
+      addedTools: 0,
+      autoActivatedTools: [],
+      removedTools,
+      warnings,
+      errors,
+    };
   }
 
   if (allowedDigests.size === 0) {
@@ -416,9 +474,7 @@ async function reloadExtensionsInner(ctx: MCPServerContext): Promise<ExtensionRe
 
     // ── Inject metadata from adjacent meta.yaml (single source of truth) ──
     const pluginProjectRoot = resolvePluginProjectRoot(pluginFile);
-    const metaYamlPath = join(pluginProjectRoot, 'meta.yaml');
-    const meta = parseSimpleYaml(metaYamlPath);
-    plugin.mergeMetadata(meta);
+    const meta = readPluginMetadata(pluginProjectRoot, plugin.id, warnings);
 
     if (ctx.extensionPluginsById.has(plugin.id)) {
       warnings.push(`Skip plugin "${plugin.id}" from ${pluginFile}: duplicate plugin id`);
@@ -491,6 +547,8 @@ async function reloadExtensionsInner(ctx: MCPServerContext): Promise<ExtensionRe
       state: pluginState,
       source: pluginFile,
     };
+    const loadedTools: string[] = [];
+    const loadedToolRecords: ExtensionToolRecord[] = [];
 
     try {
       if (plugin.onLoadHandler) {
@@ -515,7 +573,65 @@ async function reloadExtensionsInner(ctx: MCPServerContext): Promise<ExtensionRe
         runtimeRecord.state = pluginState;
       }
       ctx.extensionPluginRuntimeById.set(plugin.id, runtimeRecord);
+
+      // Register plugin tools into the extension registry and auto-activate
+      // the subset visible in the current base profile.
+      const pluginDomain = `plugin:${plugin.id}`;
+      for (const toolDef of plugin.tools) {
+        if (baseToolNames.has(toolDef.name)) {
+          warnings.push(
+            `Skip tool "${toolDef.name}" from plugin "${plugin.id}": collides with built-in tool name`,
+          );
+          continue;
+        }
+        if (ctx.extensionToolsByName.has(toolDef.name)) {
+          warnings.push(
+            `Skip duplicate extension tool "${toolDef.name}" from plugin "${plugin.id}"`,
+          );
+          continue;
+        }
+
+        const toolRecord: ExtensionToolRecord = {
+          name: toolDef.name,
+          domain: pluginDomain,
+          source: pluginFile,
+          tool: {
+            name: toolDef.name,
+            description: toolDef.description,
+            inputSchema: toolDef.schema,
+          },
+          profiles: toolDef.profiles ?? plugin.profiles,
+          handler: async (args: Record<string, unknown>) => {
+            try {
+              return await toolDef.handler(args, lifecycleContext);
+            } catch (error) {
+              logger.error(`[extension:${plugin.id}] Tool "${toolDef.name}" failed:`, error);
+              throw error;
+            }
+          },
+        };
+        ctx.extensionToolsByName.set(toolDef.name, toolRecord);
+        loadedTools.push(toolDef.name);
+        loadedToolRecords.push(toolRecord);
+
+        if (shouldAutoRegisterExtensionTool(ctx.baseTier, toolRecord)) {
+          if (registerExtensionToolRecord(ctx, toolRecord, 'reload')) {
+            activatedOnReload++;
+          }
+        }
+      }
     } catch (error) {
+      for (const toolRecord of loadedToolRecords.toReversed()) {
+        try {
+          unregisterExtensionToolRecord(ctx, toolRecord, { removeDefinition: true });
+        } catch (toolCleanupError) {
+          logger.warn(
+            `Failed to roll back extension tool "${toolRecord.name}" for plugin "${plugin.id}":`,
+            toolCleanupError,
+          );
+        }
+      }
+      ctx.extensionPluginRuntimeById.delete(plugin.id);
       try {
         if (plugin.onDeactivateHandler && pluginState === 'activated') {
           await plugin.onDeactivateHandler(lifecycleContext);
@@ -532,7 +648,6 @@ async function reloadExtensionsInner(ctx: MCPServerContext): Promise<ExtensionRe
       continue;
     }
 
-    const loadedTools = plugin.tools.map((t: ExtensionToolDefinition) => t.name);
     const loadedWorkflows: string[] = [];
     const pluginWorkflows = Array.isArray(plugin.workflows) ? plugin.workflows : [];
     for (const candidate of pluginWorkflows) {
@@ -547,14 +662,20 @@ async function reloadExtensionsInner(ctx: MCPServerContext): Promise<ExtensionRe
         loadedWorkflows.push(candidate.id);
       }
     }
-    const record = buildPluginRecord(plugin, pluginFile, loadedTools, loadedWorkflows);
+    const record = buildPluginRecord(
+      plugin,
+      toDisplayMetadata(meta),
+      pluginFile,
+      loadedTools,
+      loadedWorkflows,
+    );
     ctx.extensionPluginsById.set(record.id, record);
   }
 
   const workflowFiles = await discoverWorkflowFiles(workflowRoots);
   await loadWorkflows(ctx, workflowFiles, warnings, errors);
 
-  if (ctx.extensionToolsByName.size > 0 || removedTools > 0) {
+  if (activatedOnReload > 0 || removedTools > 0) {
     try {
       await ctx.server.sendToolListChanged();
     } catch (error) {
@@ -567,6 +688,10 @@ async function reloadExtensionsInner(ctx: MCPServerContext): Promise<ExtensionRe
   return {
     ...list,
     addedTools: ctx.extensionToolsByName.size,
+    autoActivatedTools: [...ctx.extensionToolsByName.values()]
+      .filter((record) => record.activationSource === 'reload')
+      .map((record) => record.name)
+      .toSorted(),
     removedTools,
     warnings,
     errors,

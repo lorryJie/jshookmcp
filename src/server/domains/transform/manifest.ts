@@ -18,11 +18,12 @@ const registrations = defineMethodRegistrations<H, (typeof transformTools)[numbe
     { tool: 'crypto_extract_standalone', method: 'handleCryptoExtractStandalone' },
     { tool: 'crypto_test_harness', method: 'handleCryptoTestHarness' },
     { tool: 'crypto_compare', method: 'handleCryptoCompare' },
+    { tool: 'transform_workbench', method: 'handleTransformWorkbench' },
   ],
 });
 
 async function ensure(ctx: MCPServerContext): Promise<H> {
-  const { CodeCollector } = await import('@server/domains/shared/modules');
+  const { CodeCollector } = await import('@server/domains/shared/modules/collector');
   const { TransformToolHandlers } = await import('@server/domains/transform/index');
   if (!ctx.collector) {
     ctx.collector = new CodeCollector(ctx.config.puppeteer);

@@ -64,7 +64,7 @@ This is a cosmetic issue and does not affect functionality.
 
 ```bash
 # Install the optional trace backend at the project root
-pnpm add -O better-sqlite3@12.6.2
+pnpm add -O better-sqlite3@12.10.0
 
 # If it was already installed under another Node version, rebuild it
 npm rebuild better-sqlite3 --foreground-scripts

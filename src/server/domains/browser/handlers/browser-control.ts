@@ -1,6 +1,6 @@
-import type { CodeCollector } from '@server/domains/shared/modules';
-import type { PageController } from '@server/domains/shared/modules';
-import type { ConsoleMonitor } from '@server/domains/shared/modules';
+import type { CodeCollector } from '@server/domains/shared/modules/collector';
+import type { PageController } from '@server/domains/shared/modules/collector';
+import type { ConsoleMonitor } from '@server/domains/shared/modules/collector';
 import type { CamoufoxBrowserManager } from '@server/domains/shared/modules';
 import type { TabRegistry } from '@modules/browser/TabRegistry';
 import { argBool, argNumber, argString, argStringArray } from '@server/domains/shared/parse-args';
@@ -10,6 +10,7 @@ import { logger } from '@utils/logger';
 import { projectRoot } from '@utils/config';
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
+import type { BrowserAttachRuntimeSnapshot } from '@server/runtime/ServerRuntimeState';
 
 const projectEnvPath = join(projectRoot, '.env');
 const CHROME_CHANNELS = new Set(['stable', 'beta', 'dev', 'canary'] as const);
@@ -44,10 +45,42 @@ interface BrowserControlHandlersDeps {
     targetId: string | null;
     type: string | null;
   }>;
+  onBrowserAttachStateChanged?: (snapshot: Partial<BrowserAttachRuntimeSnapshot>) => void;
 }
 
 export class BrowserControlHandlers {
   constructor(private deps: BrowserControlHandlersDeps) {}
+
+  private pickPreferredAttachPage(
+    pages: Array<{ index: number; url: string; title: string }>,
+    requestedIndex: number | null,
+  ): { selectedIndex: number; selected: { index: number; url: string; title: string } | null } {
+    if (pages.length === 0) {
+      return { selectedIndex: 0, selected: null };
+    }
+
+    if (requestedIndex !== null && requestedIndex >= 0 && requestedIndex < pages.length) {
+      return {
+        selectedIndex: requestedIndex,
+        selected: pages[requestedIndex] ?? null,
+      };
+    }
+
+    const firstUsableIndex = pages.findIndex(
+      (page) => page.url.trim().length > 0 && page.url !== 'about:blank',
+    );
+    if (firstUsableIndex >= 0) {
+      return {
+        selectedIndex: firstUsableIndex,
+        selected: pages[firstUsableIndex] ?? null,
+      };
+    }
+
+    return {
+      selectedIndex: 0,
+      selected: pages[0] ?? null,
+    };
+  }
 
   private markMonitoringContextChanged(context: string): void {
     try {
@@ -288,6 +321,16 @@ export class BrowserControlHandlers {
           registry.setCurrentByIndex(0);
         }
         const currentPage = pages[0];
+        this.deps.onBrowserAttachStateChanged?.({
+          endpoint: null,
+          selectedIndex: pages.length > 0 ? 0 : null,
+          selectedUrl: currentPage?.url ?? null,
+          selectedTitle: currentPage?.title ?? null,
+          selectedTargetId: null,
+          browserPid: this.deps.collector.getChromePid(),
+          rendererPid: null,
+          attachedAt: new Date().toISOString(),
+        });
 
         const status = await this.deps.collector.getStatus();
 
@@ -322,6 +365,23 @@ export class BrowserControlHandlers {
           ...launchRequest,
           headless: true,
         });
+        const pages = await this.deps.collector.listPages();
+        const registry = this.deps.getTabRegistry();
+        if (pages.length > 0) {
+          await this.deps.collector.selectPage(0);
+          registry.setCurrentByIndex(0);
+        }
+        const currentPage = pages[0];
+        this.deps.onBrowserAttachStateChanged?.({
+          endpoint: null,
+          selectedIndex: pages.length > 0 ? 0 : null,
+          selectedUrl: currentPage?.url ?? null,
+          selectedTitle: currentPage?.title ?? null,
+          selectedTargetId: null,
+          browserPid: this.deps.collector.getChromePid(),
+          rendererPid: null,
+          attachedAt: new Date().toISOString(),
+        });
         const fallbackStatus = await this.deps.collector.getStatus();
 
         return R.ok()
@@ -332,6 +392,10 @@ export class BrowserControlHandlers {
             relaunchReason: launch.reason ?? null,
             v8NativeSyntaxEnabled: launch.launchOptions.v8NativeSyntaxEnabled,
             launchArgs: launch.launchOptions.args,
+            selectedIndex: pages.length > 0 ? 0 : null,
+            currentUrl: currentPage?.url ?? null,
+            currentTitle: currentPage?.title ?? null,
+            totalPages: pages.length,
             status: fallbackStatus,
             fallback: {
               applied: true,
@@ -505,22 +569,33 @@ export class BrowserControlHandlers {
       await this.deps.collector.connect(connectRequest);
 
       const rawPageIndex = args.pageIndex;
+      const pageIndexProvided =
+        rawPageIndex !== undefined &&
+        rawPageIndex !== null &&
+        !(typeof rawPageIndex === 'string' && rawPageIndex.trim() === '');
       const pageIndex =
         typeof rawPageIndex === 'number'
           ? rawPageIndex
           : typeof rawPageIndex === 'string' && rawPageIndex.trim() !== ''
             ? Number(rawPageIndex)
             : 0;
-      const selectedIndex = Number.isFinite(pageIndex) ? pageIndex : 0;
+      const requestedIndex = Number.isFinite(pageIndex) ? pageIndex : 0;
 
       const pages = await this.deps.collector.listPages();
-      if (pages.length > 0 && selectedIndex < pages.length) {
+      const preferred = this.pickPreferredAttachPage(
+        pages,
+        pageIndexProvided ? requestedIndex : null,
+      );
+      const selectedIndex = preferred.selectedIndex;
+
+      if (pages.length > 0) {
         await this.deps.collector.selectPage(selectedIndex);
-      } else if (pages.length > 0) {
-        await this.deps.collector.selectPage(0);
-        logger.warn(
-          `[browser_attach] pageIndex ${selectedIndex} out of range (0-${pages.length - 1}), fell back to 0`,
-        );
+        if (requestedIndex !== selectedIndex) {
+          logger.warn(
+            `[browser_attach] requested pageIndex ${requestedIndex} resolved to ${selectedIndex}; ` +
+              `preferred non-blank target when available`,
+          );
+        }
       }
 
       const registry = this.deps.getTabRegistry();
@@ -529,11 +604,27 @@ export class BrowserControlHandlers {
       const tab = pages.length > 0 ? registry.setCurrentByIndex(actualIndex) : null;
       const selected = pages[actualIndex];
       const pageHandleReady = Boolean(tab?.pageId);
+      const browserPid = this.deps.collector.getChromePid();
+      const capabilities = {
+        pageControllerReady: pageHandleReady,
+        v8InspectorReady: pageHandleReady,
+        memoryRendererPidReady: browserPid !== null,
+      };
       if (pageHandleReady) {
         this.markMonitoringContextChanged('browser_attach');
       }
 
       const status = await this.deps.collector.getStatus();
+      const attachedTargetInfo = this.deps.collector.getAttachedTargetInfo();
+      this.deps.onBrowserAttachStateChanged?.({
+        endpoint: this.describeChromeConnectRequest(connectRequest),
+        selectedIndex: actualIndex,
+        selectedUrl: selected?.url ?? null,
+        selectedTitle: selected?.title ?? null,
+        selectedTargetId: attachedTargetInfo?.targetId ?? null,
+        browserPid,
+        attachedAt: new Date().toISOString(),
+      });
 
       return R.ok()
         .merge({
@@ -556,14 +647,19 @@ export class BrowserControlHandlers {
           networkMonitoringEnabled: false,
           consoleMonitoringEnabled: false,
           takeoverReady: pageHandleReady,
+          capabilities,
           note: pageHandleReady
             ? 'Monitoring will auto-rebind on the next console/network operation for the selected tab.'
             : 'Connected to existing Chrome, but the selected tab does not currently expose a stable Puppeteer Page' +
-              ' handle. Tab discovery still works; try selecting a different tab or navigate the tab and retry.',
+              ' handle. Tab discovery still works; try selecting a different tab or navigate the tab and retry. ' +
+              'V8/page-bound tools will degrade until a stable Page handle is available.',
           status,
         })
         .json();
     } catch (error) {
+      this.deps.onBrowserAttachStateChanged?.({
+        endpoint: connectRequest ? this.describeChromeConnectRequest(connectRequest) : null,
+      });
       return R.fail(error)
         .set('approvalHint', this.getAutoConnectApprovalHint(connectRequest ?? {}))
         .json();

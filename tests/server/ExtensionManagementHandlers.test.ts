@@ -95,8 +95,12 @@ describe('ExtensionManagementHandlers', () => {
     const ctx = {
       reloadExtensions: vi.fn(async () => ({
         addedTools: 0,
+        autoActivatedTools: [],
         pluginCount: 0,
         workflowCount: 1,
+        toolCount: 0,
+        activeToolCount: 0,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       })),
@@ -173,14 +177,22 @@ describe('ExtensionManagementHandlers', () => {
     expect(metadataCall[1]).toContain('"entry": "dist/workflow.js"');
     // @ts-expect-error — auto-suppressed [TS18048, TS2493]
     expect(metadataCall[2]).toBe('utf8');
+    const gitCmd = process.platform === 'win32' ? 'git.exe' : 'git';
     expect(execFileMock).toHaveBeenNthCalledWith(
       1,
-      'git',
+      gitCmd,
       [
         'clone',
         'https://github.com/vmoranv/jshook_workflow_batch_register',
         expect.stringContaining('workflows'),
       ],
+      expect.objectContaining({ timeout: expect.any(Number) }),
+      expect.any(Function),
+    );
+    expect(execFileMock).toHaveBeenNthCalledWith(
+      2,
+      gitCmd,
+      ['-C', expect.stringContaining('workflows'), 'checkout', 'abc123'],
       expect.objectContaining({ timeout: expect.any(Number) }),
       expect.any(Function),
     );
@@ -193,8 +205,12 @@ describe('ExtensionManagementHandlers', () => {
     const ctx = {
       reloadExtensions: vi.fn(async () => ({
         addedTools: 0,
+        autoActivatedTools: [],
         pluginCount: 1,
         workflowCount: 0,
+        toolCount: 0,
+        activeToolCount: 0,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       })),
@@ -268,9 +284,10 @@ describe('ExtensionManagementHandlers', () => {
     expect(metadataCall[1]).toContain('"entry": "dist/manifest.js"');
     // @ts-expect-error — auto-suppressed [TS18048, TS2493]
     expect(metadataCall[2]).toBe('utf8');
+    const gitCmd = process.platform === 'win32' ? 'git.exe' : 'git';
     expect(execFileMock).toHaveBeenNthCalledWith(
       1,
-      'git',
+      gitCmd,
       [
         'clone',
         'https://github.com/vmoranv/jshook_plugin_ida_bridge',
@@ -287,8 +304,12 @@ describe('ExtensionManagementHandlers', () => {
     const ctx = {
       reloadExtensions: vi.fn(async () => ({
         addedTools: 0,
+        autoActivatedTools: [],
         pluginCount: 0,
         workflowCount: 1,
+        toolCount: 0,
+        activeToolCount: 0,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       })),
@@ -337,13 +358,8 @@ describe('ExtensionManagementHandlers', () => {
 
     if (process.platform === 'win32') {
       expect(thirdCall).toEqual([
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          'pnpm --ignore-workspace install --no-frozen-lockfile --ignore-scripts',
-        ],
+        'pnpm.cmd',
+        ['--ignore-workspace', 'install', '--no-frozen-lockfile', '--ignore-scripts'],
         expect.objectContaining({
           cwd: expect.stringContaining('workflows'),
           env: expect.objectContaining({ CI: 'true' }),
@@ -351,13 +367,8 @@ describe('ExtensionManagementHandlers', () => {
         expect.any(Function),
       ]);
       expect(fourthCall).toEqual([
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          'pnpm --ignore-workspace run --if-present build',
-        ],
+        'pnpm.cmd',
+        ['--ignore-workspace', 'run', '--if-present', 'build'],
         expect.objectContaining({
           cwd: expect.stringContaining('workflows'),
           env: expect.objectContaining({ CI: 'true' }),
@@ -392,8 +403,12 @@ describe('ExtensionManagementHandlers', () => {
     const ctx = {
       reloadExtensions: vi.fn(async () => ({
         addedTools: 0,
+        autoActivatedTools: [],
         pluginCount: 0,
         workflowCount: 1,
+        toolCount: 0,
+        activeToolCount: 0,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       })),
@@ -480,8 +495,12 @@ describe('ExtensionManagementHandlers', () => {
     const ctx = {
       reloadExtensions: vi.fn(async () => ({
         addedTools: 0,
+        autoActivatedTools: [],
         pluginCount: 0,
         workflowCount: 1,
+        toolCount: 0,
+        activeToolCount: 0,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       })),
@@ -537,8 +556,12 @@ describe('ExtensionManagementHandlers', () => {
     const ctx = {
       reloadExtensions: vi.fn(async () => ({
         addedTools: 0,
+        autoActivatedTools: [],
         pluginCount: 0,
         workflowCount: 1,
+        toolCount: 0,
+        activeToolCount: 0,
+        currentProfile: 'workflow',
         errors: [],
         warnings: [],
       })),

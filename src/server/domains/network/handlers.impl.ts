@@ -10,8 +10,8 @@
  *   - RawHandlers:         HTTP, HTTP/2, RTT, ICMP
  */
 
-import type { CodeCollector } from '@server/domains/shared/modules';
-import type { ConsoleMonitor } from '@server/domains/shared/modules';
+import type { CodeCollector } from '@server/domains/shared/modules/collector';
+import type { ConsoleMonitor } from '@server/domains/shared/modules/collector';
 import { PerformanceMonitor } from '@server/domains/shared/modules';
 import type { EventBus, ServerEventMap } from '@server/EventBus';
 import type { TraceRecorder } from '@modules/trace/TraceRecorder';
@@ -199,12 +199,19 @@ export class AdvancedToolHandlers {
   handleNetworkTraceroute = (args: Record<string, unknown>) =>
     this.raw.handleNetworkTraceroute(args);
   handleNetworkIcmpProbe = (args: Record<string, unknown>) => this.raw.handleNetworkIcmpProbe(args);
+  handleDnsResolve = (args: Record<string, unknown>) => this.raw.handleDnsResolve(args);
+  handleDnsReverse = (args: Record<string, unknown>) => this.raw.handleDnsReverse(args);
+  handleDnsProbe = (args: Record<string, unknown>) => this.raw.handleDnsProbe(args);
+  handleDnsCnameChain = (args: Record<string, unknown>) => this.raw.handleDnsCnameChain(args);
+  handleDnsBulkResolve = (args: Record<string, unknown>) => this.raw.handleDnsBulkResolve(args);
   handleHttpRequestBuild = (args: Record<string, unknown>) => this.raw.handleHttpRequestBuild(args);
   handleHttpPlainRequest = (args: Record<string, unknown>) => this.raw.handleHttpPlainRequest(args);
   handleHttp2Probe = (args: Record<string, unknown>) => this.raw.handleHttp2Probe(args);
   handleHttp2FrameBuild = (args: Record<string, unknown>) => this.raw.handleHttp2FrameBuild(args);
   handleNetworkRttMeasure = (args: Record<string, unknown>) =>
     this.raw.handleNetworkRttMeasure(args);
+  handleNetworkLatencyStats = (args: Record<string, unknown>) =>
+    this.raw.handleNetworkLatencyStats(args);
 
   // ── TLS Fingerprint & Bot Detection ──
 

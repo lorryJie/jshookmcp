@@ -1,12 +1,14 @@
 // Browser tool facade: composes handler modules and routes calls.
 
-import type { CodeCollector } from '@server/domains/shared/modules';
-import type { PageController } from '@server/domains/shared/modules';
+import type { CodeCollector } from '@server/domains/shared/modules/collector';
+import type { PageController } from '@server/domains/shared/modules/collector';
 
 import type { ScriptManager } from '@server/domains/shared/modules';
-import type { ConsoleMonitor } from '@server/domains/shared/modules';
+import type { ConsoleMonitor } from '@server/domains/shared/modules/collector';
 import { AICaptchaDetector } from '@server/domains/shared/modules';
 import { argString } from '@server/domains/shared/parse-args';
+import { asErrorResponse } from '@server/domains/shared/response';
+import { ToolError } from '@errors/ToolError';
 import { DetailedDataManager } from '@utils/DetailedDataManager';
 import { getConfig } from '@utils/config';
 import { resolveOutputDirectory } from '@utils/outputPaths';
@@ -35,6 +37,8 @@ import { type TabWorkflowHandlers } from '@server/domains/browser/handlers/tab-w
 import { type JsdomHandlers } from '@server/domains/browser/handlers/jsdom-tools';
 import { initializeBrowserHandlerModules } from '@server/domains/browser/handlers/facade-initializer';
 import type { TabRegistry } from '@modules/browser/TabRegistry';
+import type { BrowserAttachRuntimeSnapshot } from '@server/runtime/ServerRuntimeState';
+import { BrowserSessionCoordinator } from '@server/runtime/BrowserSessionCoordinator';
 import {
   handleHumanMouse,
   handleHumanScroll,
@@ -50,6 +54,31 @@ import {
   handleCamoufoxLaunchFlow,
   handleCamoufoxNavigateFlow,
 } from '@server/domains/browser/handlers/camoufox-flow';
+import type { ToolArgs } from '@server/types';
+
+interface BrowserCodegenStep {
+  tool: string;
+  args: ToolArgs;
+  timestamp: string;
+}
+
+interface BrowserCodegenOutputStep {
+  tool: string;
+  args: ToolArgs;
+  timestamp: string;
+}
+
+const CODEGEN_RECORDABLE_TOOLS = new Set([
+  'page_navigate',
+  'page_click',
+  'page_type',
+  'page_hover',
+  'page_scroll',
+  'page_press_key',
+  'page_select',
+  'page_upload_files',
+  'page_wait_for_selector',
+]);
 
 export class BrowserToolHandlers {
   protected collector: CodeCollector;
@@ -87,6 +116,14 @@ export class BrowserToolHandlers {
   private detailedData: DetailedDataHandlers;
   private jsdomHandlers: JsdomHandlers;
   private tabRegistry: TabRegistry;
+  private readonly eventBus?: EventBus<ServerEventMap>;
+  private readonly getCurrentSessionId?: () => string | null;
+  private readonly sessionCoordinator?: BrowserSessionCoordinator;
+  private readonly onBrowserAttachStateChanged?: (
+    snapshot: Partial<BrowserAttachRuntimeSnapshot>,
+  ) => void;
+  private codegenStopListening?: () => void;
+  private codegenSteps: BrowserCodegenStep[] = [];
 
   constructor(
     collector: CodeCollector,
@@ -95,12 +132,19 @@ export class BrowserToolHandlers {
     scriptManager: ScriptManager,
     consoleMonitor: ConsoleMonitor,
     eventBus?: EventBus<ServerEventMap>,
+    getCurrentSessionId?: () => string | null,
+    sessionCoordinator?: BrowserSessionCoordinator,
+    onBrowserAttachStateChanged?: (snapshot: Partial<BrowserAttachRuntimeSnapshot>) => void,
   ) {
     this.collector = collector;
     this.pageController = pageController;
 
     this.scriptManager = scriptManager;
     this.consoleMonitor = consoleMonitor;
+    this.eventBus = eventBus;
+    this.getCurrentSessionId = getCurrentSessionId;
+    this.sessionCoordinator = sessionCoordinator;
+    this.onBrowserAttachStateChanged = onBrowserAttachStateChanged;
 
     const screenshotDir = resolveOutputDirectory(
       getConfig().paths.captchaScreenshotDir,
@@ -137,6 +181,8 @@ export class BrowserToolHandlers {
       setCaptchaTimeout: (value) => {
         this.captchaTimeout = value;
       },
+      getTabRegistry: () => this.getCurrentTabRegistry(),
+      onBrowserAttachStateChanged: this.onBrowserAttachStateChanged,
     });
 
     this.browserControl = modules.browserControl;
@@ -161,9 +207,99 @@ export class BrowserToolHandlers {
     this.tabRegistry = modules.tabRegistry;
   }
 
+  private makeJsonResponse(payload: unknown) {
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }],
+    };
+  }
+
+  private sanitizeCodegenArgs(args: ToolArgs): ToolArgs {
+    const sanitized = { ...args };
+    for (const key of ['delay', 'timeout']) {
+      if (sanitized[key] === undefined) {
+        delete sanitized[key];
+      }
+    }
+    return sanitized;
+  }
+
+  private getCurrentTabRegistry(): TabRegistry {
+    const sessionId = this.getCurrentSessionId?.() ?? null;
+    return this.sessionCoordinator?.getTabRegistry(sessionId) ?? this.tabRegistry;
+  }
+
+  private isSameFrameArgs(left: ToolArgs, right: ToolArgs): boolean {
+    return (
+      (left.frameUrl ?? null) === (right.frameUrl ?? null) &&
+      (left.frameSelector ?? null) === (right.frameSelector ?? null)
+    );
+  }
+
+  private compactCodegenSteps(steps: BrowserCodegenStep[]): BrowserCodegenOutputStep[] {
+    const compacted: BrowserCodegenOutputStep[] = [];
+
+    for (const step of steps) {
+      const current: BrowserCodegenOutputStep = {
+        tool: step.tool,
+        args: this.sanitizeCodegenArgs(step.args),
+        timestamp: step.timestamp,
+      };
+      const previous = compacted.at(-1);
+
+      if (!previous) {
+        compacted.push(current);
+        continue;
+      }
+
+      if (
+        current.tool === 'page_wait_for_selector' &&
+        previous.tool === 'page_wait_for_selector' &&
+        current.args.selector === previous.args.selector &&
+        this.isSameFrameArgs(current.args, previous.args)
+      ) {
+        previous.timestamp = current.timestamp;
+        continue;
+      }
+
+      if (
+        current.tool === 'page_wait_for_selector' &&
+        (previous.tool === 'page_click' || previous.tool === 'page_type') &&
+        current.args.selector === previous.args.selector &&
+        this.isSameFrameArgs(current.args, previous.args)
+      ) {
+        continue;
+      }
+
+      if (
+        current.tool === previous.tool &&
+        JSON.stringify(current.args) === JSON.stringify(previous.args)
+      ) {
+        previous.timestamp = current.timestamp;
+        continue;
+      }
+
+      compacted.push(current);
+    }
+
+    return compacted;
+  }
+
+  private formatCodegenScript(steps: BrowserCodegenOutputStep[]): string {
+    const lines = [
+      'const steps = [',
+      ...steps.map((step) => `  ${JSON.stringify({ tool: step.tool, args: step.args }, null, 0)},`),
+      '];',
+      '',
+      'for (const step of steps) {',
+      '  await callTool(step.tool, step.args);',
+      '}',
+    ];
+    return lines.join('\n');
+  }
+
   /** Get the shared TabRegistry for context enrichment. */
   getTabRegistry(): TabRegistry {
-    return this.tabRegistry;
+    return this.getCurrentTabRegistry();
   }
 
   /** Get or create camoufox page (Playwright Page). */
@@ -327,6 +463,10 @@ export class BrowserToolHandlers {
     return this.pageNavigation.handlePageForward(args);
   }
 
+  async handlePageListFrames(args: Record<string, unknown>) {
+    return this.pageData.handlePageListFrames(args);
+  }
+
   // ── Page Interaction ──
   async handlePageClick(args: Record<string, unknown>) {
     return this.pageInteraction.handlePageClick(args);
@@ -384,42 +524,34 @@ export class BrowserToolHandlers {
       case 'clear': {
         const expectedCount = args['expectedCount'];
         if (typeof expectedCount !== 'number' || expectedCount < 0) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text:
-                  'action=clear requires expectedCount (number). Call action=get first to obtain the current' +
-                  'cookie count.',
-              },
-            ],
-            isError: true,
-          };
+          return asErrorResponse(
+            new ToolError(
+              'VALIDATION',
+              'action=clear requires expectedCount (number). Call action=get first to obtain the current cookie count.',
+              { toolName: 'page_cookies' },
+            ),
+          );
         }
         const current = await this.pageData.getPageCookieCount();
         if (current !== expectedCount) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text:
-                  `Cookie count mismatch: expected ${expectedCount} but found ${current}. Call ` +
-                  `action=get to refresh, ` +
-                  `then retry with the correct count.`,
-              },
-            ],
-            isError: true,
-          };
+          return asErrorResponse(
+            new ToolError(
+              'VALIDATION',
+              `Cookie count mismatch: expected ${expectedCount} but found ${current}. Call action=get to refresh, then retry with the correct count.`,
+              { toolName: 'page_cookies', details: { expected: expectedCount, actual: current } },
+            ),
+          );
         }
         return this.pageData.handlePageClearCookies(args);
       }
       default:
-        return {
-          content: [
-            { type: 'text', text: `Invalid action: "${action}". Expected one of: get, set, clear` },
-          ],
-          isError: true,
-        };
+        return asErrorResponse(
+          new ToolError(
+            'VALIDATION',
+            `Invalid action: "${action}". Expected one of: get, set, clear`,
+            { toolName: 'page_cookies' },
+          ),
+        );
     }
   }
 
@@ -439,12 +571,11 @@ export class BrowserToolHandlers {
       case 'set':
         return this.pageData.handlePageSetLocalStorage(args);
       default:
-        return {
-          content: [
-            { type: 'text', text: `Invalid action: "${action}". Expected one of: get, set` },
-          ],
-          isError: true,
-        };
+        return asErrorResponse(
+          new ToolError('VALIDATION', `Invalid action: "${action}". Expected one of: get, set`, {
+            toolName: 'page_local_storage',
+          }),
+        );
     }
   }
 
@@ -528,9 +659,59 @@ export class BrowserToolHandlers {
     return this.tabWorkflow.handleTabWorkflow(args);
   }
 
+  async handleBrowserCodegenStart() {
+    if (!this.eventBus) {
+      return this.makeJsonResponse({
+        success: false,
+        message: 'Event bus unavailable for browser codegen recording.',
+      });
+    }
+
+    this.codegenStopListening?.();
+    this.codegenSteps = [];
+    this.codegenStopListening = this.eventBus.on('tool:called', (payload) => {
+      if (payload.domain !== 'browser' || !payload.success || payload.result?.success === false)
+        return;
+      if (!CODEGEN_RECORDABLE_TOOLS.has(payload.toolName)) return;
+      this.codegenSteps.push({
+        tool: payload.toolName,
+        args: { ...payload.args },
+        timestamp: payload.timestamp,
+      });
+    });
+
+    return this.makeJsonResponse({
+      success: true,
+      recording: true,
+      message: 'Browser action recording started.',
+    });
+  }
+
+  async handleBrowserCodegenStop() {
+    this.codegenStopListening?.();
+    this.codegenStopListening = undefined;
+
+    const rawSteps = [...this.codegenSteps];
+    const steps = this.compactCodegenSteps(rawSteps);
+    this.codegenSteps = [];
+
+    return this.makeJsonResponse({
+      success: true,
+      recording: false,
+      stepCount: steps.length,
+      rawStepCount: rawSteps.length,
+      steps,
+      script: this.formatCodegenScript(steps),
+    });
+  }
+
   // ── Detailed Data ──
   async handleGetDetailedData(args: Record<string, unknown>) {
     return this.detailedData.handleGetDetailedData(args);
+  }
+
+  async handleGetOffloadedData(args: Record<string, unknown>) {
+    return this.detailedData.handleGetOffloadedData(args);
   }
 
   // ── Camoufox Helpers ──
@@ -565,7 +746,7 @@ export class BrowserToolHandlers {
 
   // ── Human Behavior ──
   async handleHumanMouse(args: Record<string, unknown>) {
-    return handleHumanMouse(args, this.collector);
+    return handleHumanMouse(args, this.collector, this.pageController);
   }
 
   async handleHumanScroll(args: Record<string, unknown>) {
@@ -573,7 +754,7 @@ export class BrowserToolHandlers {
   }
 
   async handleHumanTyping(args: Record<string, unknown>) {
-    return handleHumanTyping(args, this.collector);
+    return handleHumanTyping(args, this.collector, this.pageController);
   }
 
   // ── CAPTCHA Solving ──

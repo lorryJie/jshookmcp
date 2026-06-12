@@ -4,15 +4,17 @@
  * Extracted from AdvancedToolHandlersIntercept (handlers.impl.core.runtime.intercept.ts).
  */
 
-import type { ConsoleMonitor } from '@server/domains/shared/modules';
+import type { FetchInterceptAction } from '@modules/monitor/FetchInterceptor';
+import type { ConsoleMonitor } from '@server/domains/shared/modules/collector';
 import type { EventBus, ServerEventMap } from '@server/EventBus';
-import { R } from '@server/domains/shared/ResponseBuilder';
+import { handleSafe, R } from '@server/domains/shared/ResponseBuilder';
 import { emitEvent } from './shared';
 
 interface InterceptRuleInput {
   urlPattern: string;
   urlPatternType?: 'glob' | 'regex';
   stage?: 'Request' | 'Response';
+  interceptAction?: FetchInterceptAction;
   responseCode?: number;
   responseHeaders?: Record<string, string>;
   responseBody?: string;
@@ -70,6 +72,7 @@ export class InterceptHandlers {
           createdRules: createdRules.map((r) => ({
             id: r.id,
             urlPattern: r.urlPattern,
+            interceptAction: r.interceptAction,
             stage: r.stage,
             responseCode: r.responseCode,
           })),
@@ -113,30 +116,24 @@ export class InterceptHandlers {
       ).json();
     }
 
-    try {
+    return handleSafe(async () => {
       if (all) {
         const result = await this.deps.consoleMonitor.disableFetchIntercept();
-        return R.ok()
-          .merge({
-            message: `Disabled all interception. Removed ${result.removedRules} rule(s).`,
-            removedRules: result.removedRules,
-          })
-          .json();
+        return {
+          message: `Disabled all interception. Removed ${result.removedRules} rule(s).`,
+          removedRules: result.removedRules,
+        };
       }
 
       const removed = await this.deps.consoleMonitor.removeFetchInterceptRule(ruleId!);
       const status = this.deps.consoleMonitor.getFetchInterceptStatus();
 
-      return R.ok()
-        .merge({
-          success: removed,
-          message: removed ? `Rule ${ruleId} removed.` : `Rule ${ruleId} not found.`,
-          remainingRules: status.rules.length,
-        })
-        .json();
-    } catch (error) {
-      return R.fail(error instanceof Error ? error.message : String(error)).json();
-    }
+      return {
+        success: removed,
+        message: removed ? `Rule ${ruleId} removed.` : `Rule ${ruleId} not found.`,
+        remainingRules: status.rules.length,
+      };
+    });
   }
 
   // ── Private Helpers ──
@@ -162,6 +159,7 @@ export class InterceptHandlers {
       urlPattern: source.urlPattern as string,
       urlPatternType: source.urlPatternType === 'regex' ? 'regex' : 'glob',
       stage: source.stage === 'Request' ? 'Request' : 'Response',
+      interceptAction: this.toInterceptAction(source.interceptAction),
       responseCode: typeof source.responseCode === 'number' ? source.responseCode : 200,
       responseHeaders: isObjectRecord(source.responseHeaders)
         ? (source.responseHeaders as Record<string, string>)
@@ -173,5 +171,12 @@ export class InterceptHandlers {
             ? JSON.stringify(source.responseBody)
             : undefined,
     };
+  }
+
+  private toInterceptAction(value: unknown): FetchInterceptAction {
+    if (value === 'continue' || value === 'abort') {
+      return value;
+    }
+    return 'fulfill';
   }
 }

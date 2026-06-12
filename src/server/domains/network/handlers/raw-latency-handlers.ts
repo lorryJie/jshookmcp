@@ -1,4 +1,3 @@
-import * as dns from 'node:dns/promises';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import * as net from 'node:net';
@@ -12,9 +11,21 @@ import {
   roundMs,
   computeRttStats,
   resolveAuthorizedTransportTarget,
+  resolveAuthorizedHostTarget,
 } from './raw-helpers';
 import { emitEvent, parseNumberArg } from './shared';
 import { icmpProbe, traceroute, isIcmpAvailable } from '@native/IcmpProbe';
+
+type PinnedLookupOneCallback = (
+  error: NodeJS.ErrnoException | null,
+  address: string,
+  family: number,
+) => void;
+
+type PinnedLookupAllCallback = (
+  error: NodeJS.ErrnoException | null,
+  addresses: Array<{ address: string; family: number }>,
+) => void;
 
 export class RawLatencyHandlers {
   constructor(private readonly eventBus?: EventBus<ServerEventMap>) {}
@@ -113,9 +124,13 @@ export class RawLatencyHandlers {
       if (!target) {
         return R.text('target is required', true);
       }
-      const resolvedTarget = await resolveHostname(target);
-      if (!resolvedTarget) {
-        return R.fail(`Could not resolve hostname: ${target}`).json();
+      const authorization = parseNetworkAuthorization(args.authorization);
+      let resolvedTarget: string;
+      try {
+        resolvedTarget = await resolveAuthorizedHostTarget(target, authorization, 'Traceroute');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return R.fail(message).json();
       }
       const maxHops = clamp(args.maxHops !== undefined ? Number(args.maxHops) : 30, 1, 64);
       const timeout = clamp(args.timeout !== undefined ? Number(args.timeout) : 5000, 100, 30000);
@@ -125,7 +140,7 @@ export class RawLatencyHandlers {
         65500,
       );
 
-      const result = traceroute({ target: resolvedTarget, maxHops, timeout, packetSize });
+      const result = await traceroute({ target: resolvedTarget, maxHops, timeout, packetSize });
       return R.ok()
         .merge({ resolvedFrom: target })
         .json(result as unknown as Record<string, unknown>);
@@ -133,6 +148,89 @@ export class RawLatencyHandlers {
       const message = err instanceof Error ? err.message : String(err);
       return R.fail(`Traceroute failed: ${message}`).json();
     }
+  }
+
+  async handleNetworkLatencyStats(args: Record<string, unknown>) {
+    const urlRaw = parseOptionalString(args.url, 'url');
+    if (!urlRaw) {
+      return R.text('url is required', true);
+    }
+
+    const probeType = (parseOptionalString(args.probeType, 'probeType') ?? 'http') as
+      | 'tcp'
+      | 'tls'
+      | 'http';
+    if (!['tcp', 'tls', 'http'].includes(probeType)) {
+      return R.text(`Invalid probeType: "${probeType}". Expected one of: tcp, tls, http`, true);
+    }
+
+    const iterations = clamp(
+      args.iterations !== undefined
+        ? parseNumberArg(args.iterations, { defaultValue: 20, min: 5, integer: true })
+        : 20,
+      5,
+      100,
+    );
+    const concurrency = clamp(
+      args.concurrency !== undefined
+        ? parseNumberArg(args.concurrency, { defaultValue: 5, min: 1, integer: true })
+        : 5,
+      1,
+      20,
+    );
+    const timeoutMs = clamp(
+      args.timeoutMs !== undefined
+        ? parseNumberArg(args.timeoutMs, { defaultValue: 5000, min: 100, integer: true })
+        : 5000,
+      100,
+      30000,
+    );
+
+    const authorization = parseNetworkAuthorization(args.authorization);
+    const { url, target } = await resolveAuthorizedTransportTarget(
+      urlRaw,
+      authorization,
+      'Latency stats',
+    );
+
+    const hostname = target.hostname;
+    const port = Number(url.port) || (url.protocol === 'https:' ? 443 : 80);
+    const resolvedIp = target.resolvedAddress ?? hostname;
+    const useHttps = url.protocol === 'https:';
+    const samples: number[] = [];
+    const errors: string[] = [];
+
+    for (let i = 0; i < iterations; i += concurrency) {
+      const batch = Array.from(
+        { length: Math.min(concurrency, iterations - i) },
+        (_, idx) => idx + i,
+      );
+      const results = await Promise.allSettled(
+        batch.map(() =>
+          this.measureSingleRtt(hostname, resolvedIp, port, probeType, timeoutMs, useHttps),
+        ),
+      );
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          samples.push(result.value);
+        } else {
+          errors.push(
+            result.reason instanceof Error ? result.reason.message : String(result.reason),
+          );
+        }
+      }
+    }
+
+    const stats = computeRttStats(samples);
+
+    return R.ok().json({
+      url: urlRaw,
+      target: { hostname, port, resolvedIp, probeType },
+      iterations,
+      concurrency,
+      stats,
+      errors: errors.length > 0 ? errors : undefined,
+    });
   }
 
   async handleNetworkIcmpProbe(args: Record<string, unknown>) {
@@ -147,9 +245,13 @@ export class RawLatencyHandlers {
       if (!target) {
         return R.text('target is required', true);
       }
-      const resolvedTarget = await resolveHostname(target);
-      if (!resolvedTarget) {
-        return R.fail(`Could not resolve hostname: ${target}`).json();
+      const authorization = parseNetworkAuthorization(args.authorization);
+      let resolvedTarget: string;
+      try {
+        resolvedTarget = await resolveAuthorizedHostTarget(target, authorization, 'ICMP probe');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return R.fail(message).json();
       }
       const ttl = clamp(args.ttl !== undefined ? Number(args.ttl) : 128, 1, 255);
       const timeout = clamp(args.timeout !== undefined ? Number(args.timeout) : 5000, 100, 30000);
@@ -159,7 +261,7 @@ export class RawLatencyHandlers {
         65500,
       );
 
-      const result = icmpProbe({ target: resolvedTarget, ttl, packetSize, timeout });
+      const result = await icmpProbe({ target: resolvedTarget, ttl, packetSize, timeout });
       return R.ok()
         .merge({ resolvedFrom: target })
         .json(result as unknown as Record<string, unknown>);
@@ -187,19 +289,27 @@ export class RawLatencyHandlers {
     }
   }
 
-  createPinnedLookup(address: string) {
+  createPinnedLookup(address: string): net.LookupFunction {
     const family = net.isIP(address) === 6 ? 6 : 4;
     return (
       _hostname: string,
       optionsOrCallback: unknown,
-      maybeCallback?: (
-        error: NodeJS.ErrnoException | null,
-        resolvedAddress: string,
-        resolvedFamily: number,
-      ) => void,
+      maybeCallback?: PinnedLookupOneCallback | PinnedLookupAllCallback,
     ): void => {
       const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
-      callback?.(null, address, family);
+      if (!callback) {
+        return;
+      }
+      if (
+        optionsOrCallback &&
+        typeof optionsOrCallback === 'object' &&
+        'all' in (optionsOrCallback as Record<string, unknown>) &&
+        (optionsOrCallback as { all?: boolean }).all
+      ) {
+        (callback as PinnedLookupAllCallback)(null, [{ address, family }]);
+        return;
+      }
+      (callback as PinnedLookupOneCallback)(null, address, family);
     };
   }
 
@@ -300,15 +410,5 @@ export class RawLatencyHandlers {
       });
       request.end();
     });
-  }
-}
-
-async function resolveHostname(target: string): Promise<string | null> {
-  if (net.isIPv4(target)) return target;
-  try {
-    const result = await dns.resolve(target, 'A');
-    return result[0] ?? null;
-  } catch {
-    return null;
   }
 }

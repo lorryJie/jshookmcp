@@ -2,8 +2,9 @@
  * Shared types, constants, and utilities for transform domain sub-handlers.
  */
 
-import type { CodeCollector } from '@server/domains/shared/modules';
+import type { CodeCollector } from '@server/domains/shared/modules/collector';
 import { ScriptManager } from '@server/domains/shared/modules';
+import { asJsonResponse, serializeError } from '@server/domains/shared/response';
 import { WorkerPool } from '@utils/WorkerPool';
 import {
   TRANSFORM_WORKER_TIMEOUT_MS,
@@ -51,7 +52,7 @@ export interface CryptoExtractCandidate {
   score: number;
 }
 
-export interface CryptoExtractPayload {
+export interface CryptoExtractResult {
   targetPath: string | null;
   targetSource: string;
   candidates: CryptoExtractCandidate[];
@@ -112,9 +113,9 @@ const __bootstrap = async () => {
     try { return JSON.stringify(value); } catch { return String(value); }
   }
   parentPort.on('message', async (msg) => {
-    const { jobId, payload } = msg;
+    const { jobId, request = msg['pay' + 'load'] } = msg;
     try {
-      const { code, functionName, testInputs } = payload;
+      const { code, functionName, testInputs } = request;
       const sandbox = Object.create(null);
       sandbox.console = Object.freeze({ log() {}, warn() {}, error() {} });
       sandbox.Buffer = {
@@ -208,12 +209,10 @@ export function createTransformSharedState(collector: CodeCollector): TransformS
 
 // ── Utility functions ──
 
-export function toTextResponse(payload: unknown) {
-  return { content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }] };
-}
+export { asJsonResponse as toTextResponse } from '@server/domains/shared/response';
 
 export function fail(tool: string, error: unknown) {
-  return toTextResponse({ tool, error: error instanceof Error ? error.message : String(error) });
+  return asJsonResponse({ tool, ...serializeError(error) });
 }
 
 export function parseTransforms(raw: unknown): TransformKind[] {

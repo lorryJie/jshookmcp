@@ -1,4 +1,4 @@
-# V8 Inspector
+# V8 检查器
 
 域名：`v8-inspector`
 

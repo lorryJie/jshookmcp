@@ -114,7 +114,7 @@ export const EXTENSION_REGISTRY_BASE_URL = process.env.EXTENSION_REGISTRY_BASE_U
 
 export const MCP_HTTP_REQUEST_TIMEOUT_MS = int('MCP_HTTP_REQUEST_TIMEOUT_MS', 30_000);
 export const MCP_HTTP_HEADERS_TIMEOUT_MS = int('MCP_HTTP_HEADERS_TIMEOUT_MS', 10_000);
-export const MCP_HTTP_KEEPALIVE_TIMEOUT_MS = int('MCP_HTTP_KEEPALIVE_TIMEOUT_MS', 1_800_000);
+export const MCP_HTTP_KEEPALIVE_TIMEOUT_MS = int('MCP_HTTP_KEEPALIVE_TIMEOUT_MS', 86_400_000); // 24h for SSE long-lived connections
 export const MCP_HTTP_FORCE_CLOSE_TIMEOUT_MS = int('MCP_HTTP_FORCE_CLOSE_TIMEOUT_MS', 5_000);
 
 export const EXTERNAL_TOOL_TIMEOUT_MS = int('EXTERNAL_TOOL_TIMEOUT_MS', 30_000);
@@ -449,6 +449,15 @@ export const SEARCH_COVERAGE_PRECISION_FACTOR = float('SEARCH_COVERAGE_PRECISION
 export const SEARCH_PREFIX_MATCH_MULTIPLIER = float('SEARCH_PREFIX_MATCH_MULTIPLIER', 0.84);
 
 /**
+ * Self-RAG quick path: when the query is a simple form (exact tool name or
+ * single token), skip expensive signals (embedding, synonym expansion, RRF
+ * fusion) and use only BM25 + trigram. Reduces latency from ~200ms to ~5ms.
+ *
+ *   SEARCH_SELF_RAG_ENABLED — master toggle for the quick path.
+ */
+export const SEARCH_SELF_RAG_ENABLED = bool('SEARCH_SELF_RAG_ENABLED', true);
+
+/**
  * ToolRouter reranking multipliers (§4.1.6 context-aware rerank).
  * Applied after search engine scoring to contextualize results based on task
  * classification (browser/network vs maintenance vs stateless compute) and
@@ -543,6 +552,13 @@ export const DETAILED_DATA_SMART_THRESHOLD_BYTES = int(
   'DETAILED_DATA_SMART_THRESHOLD_BYTES',
   50 * 1024,
 );
+// Per-field cache sanitization: strings larger than this (bytes) are offloaded to disk
+// and replaced with a compact placeholder before entering DetailedDataManager. data: URIs
+// are always offloaded regardless of size (base64 is meaningless to an LLM). See issue #62.
+export const OFFLOAD_FIELD_SANITIZE_THRESHOLD_BYTES = int(
+  'OFFLOAD_FIELD_SANITIZE_THRESHOLD_BYTES',
+  64 * 1024,
+);
 
 // ── MEDIUM — LLM parameters ──
 
@@ -563,6 +579,12 @@ export const MEMORY_SCAN_MAX_BUFFER_BYTES = int('MEMORY_SCAN_MAX_BUFFER_BYTES', 
 export const MEMORY_SCAN_MAX_RESULTS = int('MEMORY_SCAN_MAX_RESULTS', 10_000);
 export const MEMORY_SCAN_MAX_REGIONS = int('MEMORY_SCAN_MAX_REGIONS', 50_000);
 export const MEMORY_SCAN_REGION_MAX_BYTES = int('MEMORY_SCAN_REGION_MAX_BYTES', 16_777_216);
+export const MEMORY_ENUM_REGIONS_RETURN_LIMIT = int('MEMORY_ENUM_REGIONS_RETURN_LIMIT', 10_000);
+export const MEMORY_ENUM_REGIONS_MAX_BUFFER_BYTES = int(
+  'MEMORY_ENUM_REGIONS_MAX_BUFFER_BYTES',
+  10 * 1024 * 1024,
+);
+export const MEMORY_VMMAP_MAX_BUFFER_BYTES = int('MEMORY_VMMAP_MAX_BUFFER_BYTES', 5 * 1024 * 1024);
 export const MEMORY_INJECT_TIMEOUT_MS = int('MEMORY_INJECT_TIMEOUT_MS', 30_000);
 export const ENABLE_INJECTION_TOOLS = bool('ENABLE_INJECTION_TOOLS', true);
 export const MEMORY_MONITOR_INTERVAL_MS = int('MEMORY_MONITOR_INTERVAL_MS', 1_000);
@@ -626,6 +648,13 @@ export const SCAN_SESSION_MAX_COUNT = int('SCAN_SESSION_MAX_COUNT', 20);
 /** Scan session inactivity TTL (ms). Default: 30 min. */
 export const SCAN_SESSION_TTL_MS = int('SCAN_SESSION_TTL_MS', 1_800_000);
 
+/**
+ * Upper bound of the Windows x64 user-mode virtual address space (0x7FFF_FFFF_0000).
+ * Region-walking scans stop here so they never probe kernel space. It is an
+ * architectural ceiling, not a tunable, so it is a fixed bigint.
+ */
+export const USERSPACE_MAX_ADDRESS = 0x7fff_ffff_0000n;
+
 /** Max BFS depth for multi-level pointer chain scanning. */
 export const POINTER_CHAIN_MAX_DEPTH = int('POINTER_CHAIN_MAX_DEPTH', 6);
 /** Max offset (bytes) between pointer value and target to consider a match. */
@@ -662,6 +691,17 @@ export const GHIDRA_TIMEOUT_MS = int('GHIDRA_TIMEOUT_MS', 120_000);
 export const UNIDBG_TIMEOUT_MS = int('UNIDBG_TIMEOUT_MS', 60_000);
 
 /* ================================================================== */
+/*  Native emulator (in-process ARM64) session pool                   */
+/* ================================================================== */
+
+/** Idle TTL before an untouched native-emulator session is swept (ms). Default: 5 min. */
+export const NEMU_SESSION_IDLE_TTL_MS = int('NEMU_SESSION_IDLE_TTL_MS', 300_000);
+/** How often the native-emulator idle sweep runs (ms). Default: 1 min. */
+export const NEMU_SESSION_SWEEP_MS = int('NEMU_SESSION_SWEEP_MS', 60_000);
+/** Max concurrent native-emulator sessions (bounds memory). Default: 64. */
+export const NEMU_MAX_SESSIONS = int('NEMU_MAX_SESSIONS', 64);
+
+/* ================================================================== */
 /*  ADB bridge timeouts                                                */
 /* ================================================================== */
 
@@ -671,11 +711,84 @@ export const ADB_DEFAULT_TIMEOUT_MS = int('ADB_DEFAULT_TIMEOUT_MS', 30_000);
 /** Timeout for `adb shell` commands (may run longer than generic adb calls). */
 export const ADB_SHELL_TIMEOUT_MS = int('ADB_SHELL_TIMEOUT_MS', 60_000);
 
+/** Max stdout/stderr captured from a generic adb command. */
+export const ADB_MAX_BUFFER_BYTES = int('ADB_MAX_BUFFER_BYTES', 16 * 1024 * 1024);
+
+/** Max stdout/stderr captured from dumpsys/logcat style adb commands. */
+export const ADB_LARGE_OUTPUT_MAX_BUFFER_BYTES = int(
+  'ADB_LARGE_OUTPUT_MAX_BUFFER_BYTES',
+  32 * 1024 * 1024,
+);
+
+/** Timeout for adb pull/push of APKs or native libraries. */
+export const ADB_FILE_TRANSFER_TIMEOUT_MS = int('ADB_FILE_TRANSFER_TIMEOUT_MS', 180_000);
+
+/** Maximum component names emitted per package summary section. */
+export const ADB_PACKAGE_COMPONENT_LIMIT = int('ADB_PACKAGE_COMPONENT_LIMIT', 500);
+
+/** ZIP/APK header magic values accepted by adb_apk_pull validation, encoded as hex. */
+export const APK_ZIP_MAGIC_HEX_HEADERS = csv('APK_ZIP_MAGIC_HEX_HEADERS', [
+  '504b0304',
+  '504b0506',
+  '504b0708',
+]);
+
+/** Default and maximum logcat records read by adb_logcat_query. */
+export const ADB_LOGCAT_TAIL_DEFAULT = int('ADB_LOGCAT_TAIL_DEFAULT', 500);
+export const ADB_LOGCAT_TAIL_MAX = int('ADB_LOGCAT_TAIL_MAX', 20_000);
+
+/** Default and maximum matching logcat lines returned to the caller. */
+export const ADB_LOGCAT_MAX_LINES_DEFAULT = int('ADB_LOGCAT_MAX_LINES_DEFAULT', 100);
+export const ADB_LOGCAT_MAX_LINES_MAX = int('ADB_LOGCAT_MAX_LINES_MAX', 5_000);
+
+/** Default and maximum wait after am start -W before reading startup logs. */
+export const ADB_COLD_START_WAIT_MS_DEFAULT = int('ADB_COLD_START_WAIT_MS_DEFAULT', 5_000);
+export const ADB_COLD_START_WAIT_MS_MAX = int('ADB_COLD_START_WAIT_MS_MAX', 30_000);
+
+/** Default and maximum logcat records inspected by adb_app_cold_start_trace. */
+export const ADB_COLD_START_LOGCAT_TAIL_DEFAULT = int('ADB_COLD_START_LOGCAT_TAIL_DEFAULT', 800);
+export const ADB_COLD_START_LOGCAT_TAIL_MIN = int('ADB_COLD_START_LOGCAT_TAIL_MIN', 100);
+export const ADB_COLD_START_LOGCAT_TAIL_MAX = int('ADB_COLD_START_LOGCAT_TAIL_MAX', 20_000);
+
+/** Maximum startup timeline entries returned by adb_app_cold_start_trace. */
+export const ADB_COLD_START_TIMELINE_LIMIT = int('ADB_COLD_START_TIMELINE_LIMIT', 300);
+
 /** Timeout for an HTTP GET against an on-device WebView debugger endpoint. */
 export const ADB_WEBVIEW_HTTP_TIMEOUT_MS = int('ADB_WEBVIEW_HTTP_TIMEOUT_MS', 5_000);
 
 /** Timeout for establishing a WebSocket to an on-device WebView. */
 export const ADB_WEBVIEW_WS_TIMEOUT_MS = int('ADB_WEBVIEW_WS_TIMEOUT_MS', 10_000);
+
+/** Default host port for ADB WebView CDP forwarding. */
+export const ADB_WEBVIEW_HOST_PORT_DEFAULT = int('ADB_WEBVIEW_HOST_PORT_DEFAULT', 9222);
+
+/* ================================================================== */
+/*  Proxy                                                              */
+/* ================================================================== */
+
+/** Max captured request/response records kept in memory by the proxy domain. */
+export const PROXY_CAPTURE_BUFFER_MAX = int('PROXY_CAPTURE_BUFFER_MAX', 5_000);
+
+/** Max captured request/response records returned by proxy_get_requests. */
+export const PROXY_CAPTURE_RETURN_LIMIT = int('PROXY_CAPTURE_RETURN_LIMIT', 100);
+
+/** Timeout for adb commands issued by proxy_setup_adb_device. */
+export const PROXY_ADB_TIMEOUT_MS = int('PROXY_ADB_TIMEOUT_MS', 60_000);
+
+/** Max stdout/stderr captured from adb commands issued by proxy_setup_adb_device. */
+export const PROXY_ADB_MAX_BUFFER_BYTES = int('PROXY_ADB_MAX_BUFFER_BYTES', 8 * 1024 * 1024);
+
+/* ================================================================== */
+/*  Binary string extraction                                           */
+/* ================================================================== */
+
+export const BINARY_STRINGS_MIN_LENGTH_DEFAULT = int('BINARY_STRINGS_MIN_LENGTH_DEFAULT', 4);
+export const BINARY_STRINGS_MIN_LENGTH_FLOOR = int('BINARY_STRINGS_MIN_LENGTH_FLOOR', 2);
+export const BINARY_STRINGS_MIN_LENGTH_CEILING = int('BINARY_STRINGS_MIN_LENGTH_CEILING', 256);
+export const BINARY_STRINGS_MAX_RESULTS_DEFAULT = int('BINARY_STRINGS_MAX_RESULTS_DEFAULT', 1_000);
+export const BINARY_STRINGS_MAX_RESULTS_LIMIT = int('BINARY_STRINGS_MAX_RESULTS_LIMIT', 50_000);
+export const BINARY_STRINGS_PRINTABLE_ASCII_MIN = int('BINARY_STRINGS_PRINTABLE_ASCII_MIN', 0x20);
+export const BINARY_STRINGS_PRINTABLE_ASCII_MAX = int('BINARY_STRINGS_PRINTABLE_ASCII_MAX', 0x7e);
 
 /* ================================================================== */
 /*  Mojo IPC                                                           */
@@ -847,3 +960,115 @@ export const MEMORY_VMMAP_ENUM_TIMEOUT_MS = int('MEMORY_VMMAP_ENUM_TIMEOUT_MS', 
 
 /** Timeout for PowerShell-based module listing subprocesses. */
 export const MEMORY_MODULES_TIMEOUT_MS = int('MEMORY_MODULES_TIMEOUT_MS', 30_000);
+
+/* ================================================================== */
+/*  MCP structured logging                                             */
+/* ================================================================== */
+
+/** Whether to enable MCP `notifications/message` structured log transport. */
+export const MCP_LOG_ENABLED = bool('MCP_LOG_ENABLED', false);
+
+/** Minimum log level for the MCP structured log transport. */
+export const MCP_LOG_LEVEL = str('MCP_LOG_LEVEL', 'info');
+
+/** Directory for file-based MCP log persistence. Empty = disabled. */
+export const MCP_LOG_FILE_DIR = str('MCP_LOG_FILE_DIR', '');
+
+/* ================================================================== */
+/*  Dart Inspector (libapp.so string extraction)                       */
+/* ================================================================== */
+
+/**
+ * Minimum length for a string to be considered. Below the floor the extractor
+ * emits nothing useful (entropy noise), above the ceiling almost no real Dart
+ * symbol exists. Both are user-tunable.
+ */
+export const DART_MIN_LENGTH = int('DART_MIN_LENGTH', 4);
+export const DART_MIN_LENGTH_FLOOR = int('DART_MIN_LENGTH_FLOOR', 2);
+export const DART_MIN_LENGTH_CEILING = int('DART_MIN_LENGTH_CEILING', 64);
+
+/**
+ * Streaming chunk parameters. Overlap MUST cover the largest expected single
+ * string so that strings straddling a chunk boundary are still detected.
+ */
+export const DART_MAX_CHUNK_BYTES = int('DART_MAX_CHUNK_BYTES', 16 * 1024 * 1024);
+export const DART_CHUNK_OVERLAP_BYTES = int('DART_CHUNK_OVERLAP_BYTES', 128);
+
+/** Printable ASCII range used when scanning ASCII strings. */
+export const DART_PRINTABLE_ASCII_MIN = int('DART_PRINTABLE_ASCII_MIN', 0x20);
+export const DART_PRINTABLE_ASCII_MAX = int('DART_PRINTABLE_ASCII_MAX', 0x7e);
+
+/** Default encoding for dart_strings_extract: 'ascii' | 'utf16le' | 'both'. */
+export const DART_DEFAULT_ENCODING = str('DART_DEFAULT_ENCODING', 'both');
+
+/** Max offsets recorded per unique string. Excess offsets are truncated and marked. */
+export const DART_MAX_OFFSETS_PER_STRING = int('DART_MAX_OFFSETS_PER_STRING', 1000);
+
+/**
+ * customRules safety knobs. MAX_REGEX_PATTERN_LENGTH caps the pattern source,
+ * REGEX_TIMEOUT_MS bounds a single match attempt at runtime, ALLOWED_REGEX_FLAGS
+ * restricts which flags users may supply (g is added internally; m/y/s rejected).
+ */
+export const DART_MAX_REGEX_PATTERN_LENGTH = int('DART_MAX_REGEX_PATTERN_LENGTH', 256);
+export const DART_REGEX_TIMEOUT_MS = int('DART_REGEX_TIMEOUT_MS', 50);
+export const DART_ALLOWED_REGEX_FLAGS = str('DART_ALLOWED_REGEX_FLAGS', 'iu');
+
+/** Overall budget for a single dart_strings_extract call (ms / payload bytes). */
+export const DART_MAX_EXTRACT_DURATION_MS = int('DART_MAX_EXTRACT_DURATION_MS', 30_000);
+export const DART_MAX_RESULT_BYTES = int('DART_MAX_RESULT_BYTES', 16 * 1024 * 1024);
+
+/**
+ * dart_smi_scan default upper bound on decoded Smi values. Tunes the
+ * signal-to-noise ratio of the scanner (large random words divide out to
+ * huge "integers" that are almost never meaningful literals).
+ */
+export const DART_MAX_SMI_VALUE = int('DART_MAX_SMI_VALUE', 1_000_000);
+
+/**
+ * dart_symbolize ceiling on the obfuscation-map JSON the loader will
+ * accept. Real Flutter obfuscation maps are typically a few hundred KB;
+ * 16 MiB keeps memory bounded against pathological inputs.
+ */
+export const DART_MAX_MAP_BYTES = int('DART_MAX_MAP_BYTES', 16 * 1024 * 1024);
+
+/**
+ * flutter_packages_detect aggregation caps. Real-world Flutter apps reference
+ * 50–300 packages and each package usually surfaces a few dozen files; the
+ * defaults keep the response bounded against pathological binaries that
+ * splice tens of thousands of synthetic `package:` strings.
+ */
+export const DART_MAX_PACKAGES_PER_RESULT = int('DART_MAX_PACKAGES_PER_RESULT', 1000);
+export const DART_MAX_FILES_PER_PACKAGE = int('DART_MAX_FILES_PER_PACKAGE', 50);
+
+/**
+ * dart_snapshot_header_parse / dart_version_fingerprint safety knobs.
+ * MAX_FILE_BYTES caps total input size (default 1 GiB) so the parser refuses
+ * pathological inputs early with a PERMISSION error. HEADER_SCAN_MAX_BYTES is
+ * the upper bound on the byte-scan fallback used when the named ELF symbol is
+ * stripped (default 32 MiB — Dart isolate snapshot data normally sits within
+ * the first dozen MiB of libapp.so).
+ */
+export const DART_SNAPSHOT_MAX_FILE_BYTES = int('DART_SNAPSHOT_MAX_FILE_BYTES', 1024 * 1024 * 1024);
+export const DART_SNAPSHOT_HEADER_SCAN_MAX_BYTES = int(
+  'DART_SNAPSHOT_HEADER_SCAN_MAX_BYTES',
+  32 * 1024 * 1024,
+);
+
+/**
+ * Optional path to a JSON file extending the built-in snapshot version table
+ * (snapshotHash → flutterVersion/engineCommit/dartSdkRev). User entries take
+ * precedence on hash collisions. Default empty = built-in table only.
+ */
+export const DART_SNAPSHOT_TABLE_PATH = str('DART_SNAPSHOT_TABLE_PATH', '');
+
+/**
+ * dart_object_pool_dump safety knobs. The dumper iterates the Dart isolate
+ * snapshot's ObjectPool slot-by-slot; these constants bound the work per
+ * call. MAX_SLOTS caps how many slots may be emitted (default 4096).
+ * PREVIEW_BYTES truncates string slot previews (default 64 bytes).
+ * MAX_DUMP_DURATION_MS is a wall-clock budget enforced inside the dumper
+ * (default 10 s) so a malformed grammar can not loop forever.
+ */
+export const DART_PP_MAX_SLOTS = int('DART_PP_MAX_SLOTS', 4096);
+export const DART_PP_PREVIEW_BYTES = int('DART_PP_PREVIEW_BYTES', 64);
+export const DART_PP_MAX_DUMP_DURATION_MS = int('DART_PP_MAX_DUMP_DURATION_MS', 10_000);

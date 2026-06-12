@@ -17,11 +17,13 @@ const registrations = defineMethodRegistrations<H, (typeof graphqlTools)[number]
     { tool: 'graphql_introspect', method: 'handleGraphqlIntrospect' },
     { tool: 'graphql_extract_queries', method: 'handleGraphqlExtractQueries' },
     { tool: 'graphql_replay', method: 'handleGraphqlReplay' },
+    { tool: 'graphql_enum_schema', method: 'handleGraphqlEnumSchema' },
   ],
 });
 
 async function ensure(ctx: MCPServerContext): Promise<H> {
-  const { CodeCollector, ConsoleMonitor } = await import('@server/domains/shared/modules');
+  const { CodeCollector, ConsoleMonitor } =
+    await import('@server/domains/shared/modules/collector');
   const { GraphQLToolHandlers } = await import('@server/domains/graphql/index');
   if (!ctx.collector) {
     ctx.collector = new CodeCollector(ctx.config.puppeteer);

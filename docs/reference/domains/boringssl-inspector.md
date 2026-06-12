@@ -1,4 +1,4 @@
-# BoringSSL Inspector
+# BoringSSL 检查
 
 域名：`boringssl-inspector`
 

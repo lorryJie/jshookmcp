@@ -164,6 +164,7 @@ describe('browser tool definitions', () => {
   describe('browserRuntimeTools', () => {
     const expectedNames = [
       'get_detailed_data',
+      'get_offloaded_data',
       'browser_launch',
       'camoufox_server',
       'browser_attach',
@@ -180,6 +181,14 @@ describe('browser tool definitions', () => {
       const schema = getInputSchema(tool);
       expect(schema.required).toContain('detailId');
       expect(schema.properties).toHaveProperty('path');
+    });
+
+    it('get_offloaded_data requires path and has encoding enum', async () => {
+      const tool = getToolByName(browserRuntimeTools, 'get_offloaded_data');
+      const schema = getInputSchema(tool);
+      expect(schema.required).toContain('path');
+      const encodingProp = getSchemaProperty<Record<string, unknown>>(tool, 'encoding');
+      expect(encodingProp.enum).toEqual(['base64', 'utf8']);
     });
 
     it('browser_launch has driver enum with chrome and camoufox', async () => {
@@ -239,6 +248,11 @@ describe('browser tool definitions', () => {
     const noArgPageTools = ['page_reload', 'page_back', 'page_forward'];
     it.each(noArgPageTools)('%s has no required properties', (name) => {
       const tool = getToolByName(browserPageCoreTools, name);
+      expect(getInputSchema(tool).required).toBeUndefined();
+    });
+
+    it('page_list_frames has no required properties', async () => {
+      const tool = getToolByName(browserPageCoreTools, 'page_list_frames');
       expect(getInputSchema(tool).required).toBeUndefined();
     });
 
@@ -396,10 +410,12 @@ describe('browser tool definitions', () => {
 
   describe('behaviorTools', () => {
     it('has exactly 6 behavior tools', async () => {
-      expect(behaviorTools).toHaveLength(6);
+      expect(behaviorTools).toHaveLength(8);
     });
 
     const expectedBehaviorNames = [
+      'browser_codegen_start',
+      'browser_codegen_stop',
       'captcha_solver_capabilities',
       'human_mouse',
       'human_scroll',
@@ -417,11 +433,16 @@ describe('browser tool definitions', () => {
       const schema = getInputSchema(tool);
       expect(schema.required).toContain('selector');
       expect(schema.required).toContain('text');
+      expect(schema.properties).toHaveProperty('frameUrl');
+      expect(schema.properties).toHaveProperty('frameSelector');
     });
 
     it('human_mouse has no required properties', async () => {
       const tool = getToolByName(behaviorTools, 'human_mouse');
-      expect(getInputSchema(tool).required).toBeUndefined();
+      const schema = getInputSchema(tool);
+      expect(schema.required).toBeUndefined();
+      expect(schema.properties).toHaveProperty('frameUrl');
+      expect(schema.properties).toHaveProperty('frameSelector');
     });
 
     it('human_scroll has no required properties', async () => {
@@ -434,6 +455,15 @@ describe('browser tool definitions', () => {
       expect(getInputSchema(tool).required).toBeUndefined();
     });
 
+    it('browser_codegen tools have no required properties', async () => {
+      expect(getInputSchema(getToolByName(behaviorTools, 'browser_codegen_start')).required).toBe(
+        undefined,
+      );
+      expect(getInputSchema(getToolByName(behaviorTools, 'browser_codegen_stop')).required).toBe(
+        undefined,
+      );
+    });
+
     it('captcha_vision_solve has mode enum', async () => {
       const tool = getToolByName(behaviorTools, 'captcha_vision_solve');
       const modeProp = getSchemaProperty<Record<string, unknown>>(tool, 'mode');
@@ -443,8 +473,8 @@ describe('browser tool definitions', () => {
     it('captcha_vision_solve has challengeType enum', async () => {
       const tool = getToolByName(behaviorTools, 'captcha_vision_solve');
       const prop = getSchemaProperty<Record<string, unknown>>(tool, 'challengeType');
-      expect(prop.enum).toEqual(['image', 'widget', 'browser_check', 'auto']);
-      expect(prop.default).toBe('auto');
+      expect(prop.enum).toEqual(['image', 'widget', 'browser_check']);
+      expect(prop.default).toBe('image');
     });
 
     it('widget_challenge_solve has mode enum with three options', async () => {
@@ -458,6 +488,29 @@ describe('browser tool definitions', () => {
       const prop = getSchemaProperty<Record<string, unknown>>(tool, 'injectToken');
       expect(prop.type).toBe('boolean');
       expect(prop.default).toBe(true);
+    });
+
+    it('captcha_vision_solve exposes explicit taskKind and imageBase64 fields', async () => {
+      const tool = getToolByName(behaviorTools, 'captcha_vision_solve');
+      const taskKind = getSchemaProperty<Record<string, unknown>>(tool, 'taskKind');
+      const imageBase64 = getSchemaProperty<Record<string, unknown>>(tool, 'imageBase64');
+      expect(taskKind.enum).toEqual([
+        'image',
+        'recaptcha_v2',
+        'recaptcha_v3',
+        'hcaptcha',
+        'funcaptcha',
+        'turnstile',
+      ]);
+      expect(imageBase64.type).toBe('string');
+    });
+
+    it('widget_challenge_solve exposes explicit responseSelector and callbackName fields', async () => {
+      const tool = getToolByName(behaviorTools, 'widget_challenge_solve');
+      const responseSelector = getSchemaProperty<Record<string, unknown>>(tool, 'responseSelector');
+      const callbackName = getSchemaProperty<Record<string, unknown>>(tool, 'callbackName');
+      expect(responseSelector.type).toBe('string');
+      expect(callbackName.type).toBe('string');
     });
   });
 

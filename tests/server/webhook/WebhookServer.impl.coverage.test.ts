@@ -1,5 +1,33 @@
+import { EventEmitter, once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
 import { WebhookServerImpl } from '@server/webhook/WebhookServer.impl';
+
+async function startServer(server: WebhookServerImpl): Promise<number> {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    server.start();
+    const httpServer = (server as any).server as import('node:http').Server;
+    if (!httpServer.listening) {
+      await once(httpServer, 'listening');
+    }
+    const port = ((httpServer.address() as AddressInfo | null)?.port ?? 0) as number;
+    if (port > 0 && !isFetchBlockedPort(port)) {
+      return port;
+    }
+    await server.stop();
+  }
+  throw new Error('Unable to allocate a fetch-safe webhook test port');
+}
+
+function isFetchBlockedPort(port: number): boolean {
+  if (port >= 6665 && port <= 6669) return true;
+  return new Set([
+    1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102,
+    103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465,
+    512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993,
+    995, 1719, 1720, 1723, 2049, 3659, 4045, 5060, 5061, 6000, 6566, 6697, 10080,
+  ]).has(port);
+}
 
 describe('WebhookServerImpl coverage', () => {
   it('uses default port when not specified', () => {
@@ -100,6 +128,18 @@ describe('WebhookServerImpl coverage', () => {
     expect(server.isRunning()).toBe(false);
   });
 
+  it('propagates close callback failures during stop', async () => {
+    const server = new WebhookServerImpl({ port: 8080 });
+    (server as any).server = {
+      close: (callback: (error?: Error | null) => void) => {
+        callback(new Error('close failed'));
+      },
+    };
+
+    await expect(server.stop()).rejects.toThrow('close failed');
+    expect(server.isRunning()).toBe(false);
+  });
+
   it('listEndpoints returns copies', () => {
     const server = new WebhookServerImpl({ port: 8080 });
     server.registerEndpoint({ path: '/hook' });
@@ -114,5 +154,190 @@ describe('WebhookServerImpl coverage', () => {
     const stats1 = server.getStats();
     const stats2 = server.getStats();
     expect(stats1).not.toBe(stats2);
+  });
+
+  it('handles empty request bodies with default method and url fallbacks', async () => {
+    const server = new WebhookServerImpl({ port: 8080 });
+    server.registerEndpoint({ path: '/', method: 'GET' });
+
+    const request = new EventEmitter() as any;
+    request.method = undefined;
+    request.url = undefined;
+    request.headers = {};
+    request.setEncoding = vi.fn();
+
+    const response = {
+      statusCode: 200,
+      setHeader: vi.fn(),
+      end: vi.fn(),
+    } as any;
+
+    const pending = (server as any).handleRequest(request, response) as Promise<void>;
+    request.emit('end');
+    await pending;
+
+    expect(request.setEncoding).toHaveBeenCalledWith('utf8');
+    expect(response.setHeader).toHaveBeenCalledWith('content-type', 'application/json');
+    expect(response.end).toHaveBeenCalledWith(JSON.stringify({ ok: true, endpointId: 'ep-1' }));
+  });
+
+  it('rejects when request streaming fails before completion', async () => {
+    const server = new WebhookServerImpl({ port: 8080 });
+    server.registerEndpoint({ path: '/hook' });
+
+    const request = new EventEmitter() as any;
+    request.method = 'POST';
+    request.url = '/hook';
+    request.headers = {};
+    request.setEncoding = vi.fn();
+
+    const response = {
+      statusCode: 200,
+      setHeader: vi.fn(),
+      end: vi.fn(),
+    } as any;
+
+    const pending = (server as any).handleRequest(request, response) as Promise<void>;
+    request.emit('error', new Error('stream failed'));
+
+    await expect(pending).rejects.toThrow('stream failed');
+    expect(response.end).not.toHaveBeenCalled();
+  });
+
+  it('returns not found for unknown routes', async () => {
+    const server = new WebhookServerImpl({ port: 0 });
+    const port = await startServer(server);
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/missing`, { method: 'POST' });
+      expect(response.status).toBe(404);
+      await expect(response.text()).resolves.toBe('not found');
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it('rejects webhook requests with the wrong secret', async () => {
+    const server = new WebhookServerImpl({ port: 0 });
+    server.registerEndpoint({ path: '/secure', secret: 'expected-secret' });
+    const port = await startServer(server);
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/secure`, {
+        method: 'POST',
+        headers: { 'x-webhook-secret': 'wrong-secret' },
+      });
+      expect(response.status).toBe(401);
+      await expect(response.text()).resolves.toBe('unauthorized');
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it('queues raw payloads and ignores unknown event names', async () => {
+    const queue = { enqueue: vi.fn() };
+    const handler = vi.fn();
+    const server = new WebhookServerImpl({ port: 0, commandQueue: queue as any });
+    server.registerEndpoint({ path: '/hook' });
+    server.registerEvent('tool_called', handler);
+    const port = await startServer(server);
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/hook`, {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain' },
+        body: 'not-json',
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toContain('application/json');
+      await expect(response.json()).resolves.toMatchObject({ ok: true, endpointId: 'ep-1' });
+      expect(queue.enqueue).toHaveBeenCalledWith({
+        endpointId: 'ep-1',
+        payload: { rawBody: 'not-json' },
+      });
+      expect(handler).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it('invokes registered event handlers and tracks sent webhooks', async () => {
+    const queue = { enqueue: vi.fn() };
+    const handler = vi.fn();
+    const server = new WebhookServerImpl({ port: 0, commandQueue: queue as any });
+    server.registerEndpoint({ path: '/events', secret: 'top-secret' });
+    server.registerEvent('tool_called', handler);
+    const port = await startServer(server);
+    const originalFetch = global.fetch;
+
+    try {
+      const response = await originalFetch(`http://127.0.0.1:${port}/events`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-webhook-secret': 'top-secret',
+        },
+        body: JSON.stringify({ event: 'tool_called', payload: { id: 1 } }),
+      });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ ok: true, endpointId: 'ep-1' });
+      expect(queue.enqueue).toHaveBeenCalledWith({
+        endpointId: 'ep-1',
+        payload: { event: 'tool_called', payload: { id: 1 } },
+      });
+      expect(handler).toHaveBeenCalledWith({ event: 'tool_called', payload: { id: 1 } });
+
+      global.fetch = vi.fn(async () => new Response(null, { status: 204 })) as typeof fetch;
+      await server.sendWebhook('http://127.0.0.1:43210/hook', 'tool_called', { value: 1 });
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://127.0.0.1:43210/hook',
+        expect.objectContaining({
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ event: 'tool_called', payload: { value: 1 } }),
+        }),
+      );
+      const stats = server.getStats();
+      expect(stats.webhooksSent).toBe(1);
+      expect(stats.lastSentAt).toBeTruthy();
+    } finally {
+      global.fetch = originalFetch;
+      await server.stop();
+    }
+  });
+
+  it('covers remaining webhook event branches without registered listeners', async () => {
+    const server = new WebhookServerImpl({ port: 8080 });
+    const domainActivated = vi.fn();
+    const evidenceAdded = vi.fn();
+    const workflowCompleted = vi.fn();
+
+    server.registerEvent('domain_activated', domainActivated);
+    server.registerEvent('evidence_added', evidenceAdded);
+    server.registerEvent('workflow_completed', workflowCompleted);
+
+    await expect(
+      (server as any).invokeEventHandlers('domain_activated', { event: 'domain_activated' }),
+    ).resolves.toBeUndefined();
+    await expect(
+      (server as any).invokeEventHandlers('evidence_added', { event: 'evidence_added' }),
+    ).resolves.toBeUndefined();
+    await expect(
+      (server as any).invokeEventHandlers('workflow_completed', {
+        event: 'workflow_completed',
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      (server as any).invokeEventHandlers('tool_called', { event: 'tool_called' }),
+    ).resolves.toBeUndefined();
+    await expect(
+      (server as any).invokeEventHandlers('not_a_webhook_event', {
+        event: 'not_a_webhook_event',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(domainActivated).toHaveBeenCalledWith({ event: 'domain_activated' });
+    expect(evidenceAdded).toHaveBeenCalledWith({ event: 'evidence_added' });
+    expect(workflowCompleted).toHaveBeenCalledWith({ event: 'workflow_completed' });
   });
 });

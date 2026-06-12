@@ -1,5 +1,6 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { logger } from '@utils/logger';
 
 export interface SnapshotSource {
@@ -129,6 +130,10 @@ export class RuntimeSnapshotScheduler {
   }
 }
 
-export function getStateDir(baseDir: string): string {
-  return resolve(baseDir, '.jshookmcp', 'state');
+export function getStateDir(): string {
+  const overridden = process.env.JSHOOK_STATE_DIR;
+  if (typeof overridden === 'string' && overridden.trim().length > 0) {
+    return resolve(homedir(), overridden);
+  }
+  return resolve(homedir(), '.jshookmcp', 'state');
 }

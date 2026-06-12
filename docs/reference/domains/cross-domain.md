@@ -1,4 +1,4 @@
-# Cross-Domain
+# 跨域关联
 
 域名：`cross-domain`
 
@@ -16,8 +16,8 @@
 
 ## 常见组合
 
-- cross-domain + evidence
-- cross-domain + v8-inspector + skia-capture
+- cross-domain + instrumentation
+- cross-domain + v8-inspector + canvas
 
 ## 工具清单（6）
 

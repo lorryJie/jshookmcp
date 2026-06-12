@@ -12,7 +12,7 @@
  * @module Win32API
  */
 
-import koffi from 'koffi';
+import koffi, { type LibraryHandle } from 'koffi';
 import { logger } from '@utils/logger';
 
 // ── Type Definitions ──
@@ -94,9 +94,9 @@ export const MEM_TYPE = {
 
 // ── Library Loading ──
 
-let kernel32: koffi.IKoffiLib | null = null;
-let ntdll: koffi.IKoffiLib | null = null;
-let psapi: koffi.IKoffiLib | null = null;
+let kernel32: LibraryHandle | null = null;
+let ntdll: LibraryHandle | null = null;
+let psapi: LibraryHandle | null = null;
 let koffiAvailable: boolean | null = null;
 
 /**
@@ -131,7 +131,7 @@ export function isWindows(): boolean {
 /**
  * Get or load kernel32.dll
  */
-function getKernel32(): koffi.IKoffiLib {
+function getKernel32(): LibraryHandle {
   if (!kernel32) {
     kernel32 = koffi.load('kernel32.dll');
     logger.debug('Loaded kernel32.dll via koffi');
@@ -142,7 +142,7 @@ function getKernel32(): koffi.IKoffiLib {
 /**
  * Get or load ntdll.dll
  */
-function getNtdll(): koffi.IKoffiLib {
+function getNtdll(): LibraryHandle {
   if (!ntdll) {
     ntdll = koffi.load('ntdll.dll');
     logger.debug('Loaded ntdll.dll via koffi');
@@ -153,7 +153,7 @@ function getNtdll(): koffi.IKoffiLib {
 /**
  * Get or load psapi.dll
  */
-function getPsapi(): koffi.IKoffiLib {
+function getPsapi(): LibraryHandle {
   if (!psapi) {
     psapi = koffi.load('psapi.dll');
     logger.debug('Loaded psapi.dll via koffi');

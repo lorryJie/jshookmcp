@@ -25,9 +25,13 @@ const zhTranslationsPath = join(
 const zhPlaceholderPrefix = '待补充中文：';
 const referenceRegistryPlatform = 'win32';
 
+const zhVitepressRoot = join(projectRoot, 'docs', '.vitepress');
+const zhSidebarPath = join(zhVitepressRoot, 'sidebar-reference-zh.mjs');
+const enSidebarPath = join(zhVitepressRoot, 'sidebar-reference-en.mjs');
+
 const META = {
   core: {
-    zhTitle: 'Core',
+    zhTitle: '核心',
     zhSummary:
       '核心静态/半静态分析域，覆盖脚本采集、反混淆、语义理解、webpack/source map 与加密识别。',
     zhScenarios: ['脚本采集与静态检索', '混淆代码理解', '从 bundle/source map 恢复源码'],
@@ -42,45 +46,11 @@ const META = {
     ],
     enCombos: ['browser + network + core', 'core + sourcemap + transform'],
   },
-  antidebug: {
-    zhTitle: 'AntiDebug',
-    zhSummary: '反反调试域，集中提供检测与绕过浏览器端反调试脚本的工具。',
-    zhScenarios: ['调试器绕过', '计时检测缓解', '控制台/devtools 探测对抗'],
-    zhCombos: ['browser + antidebug + debugger'],
-    enTitle: 'AntiDebug',
-    enSummary:
-      'Anti-anti-debug domain focused on detecting and bypassing browser-side anti-debugging protections.',
-    enScenarios: [
-      'Bypass debugger traps',
-      'Mitigate timing checks',
-      'Counter console/devtools detection',
-    ],
-    enCombos: ['browser + antidebug + debugger'],
-  },
-  evidence: {
-    zhTitle: 'Evidence',
-    zhSummary: '逆向证据图域，用图结构串联 URL、脚本、函数、Hook 与捕获产物之间的溯源关系。',
-    zhScenarios: [
-      '按 URL / 函数 / scriptId 反查关联节点',
-      '查看前向或反向 provenance chain',
-      '导出 JSON / Markdown 证据报告',
-    ],
-    zhCombos: ['instrumentation + evidence', 'network + hooks + evidence'],
-    enTitle: 'Evidence',
-    enSummary:
-      'Evidence-graph domain that models provenance between URLs, scripts, functions, hooks, and captured artifacts.',
-    enScenarios: [
-      'Query nodes by URL, function, or script ID',
-      'Traverse forward or backward provenance chains',
-      'Export JSON or Markdown evidence reports',
-    ],
-    enCombos: ['instrumentation + evidence', 'network + hooks + evidence'],
-  },
   browser: {
-    zhTitle: 'Browser',
+    zhTitle: '浏览器',
     zhSummary: '浏览器控制与 DOM 交互主域，也是大多数工作流的入口。',
     zhScenarios: ['页面导航', 'DOM 操作与截图', '多标签页与本地存储读取'],
-    zhCombos: ['browser + network', 'browser + hooks', 'browser + workflow'],
+    zhCombos: ['browser + network', 'browser + instrumentation', 'browser + workflow'],
     enTitle: 'Browser',
     enSummary:
       'Primary browser control and DOM interaction domain; the usual entry point for most workflows.',
@@ -89,51 +59,42 @@ const META = {
       'Interact with the DOM and capture screenshots',
       'Work with tabs and storage',
     ],
-    enCombos: ['browser + network', 'browser + hooks', 'browser + workflow'],
+    enCombos: ['browser + network', 'browser + instrumentation', 'browser + workflow'],
   },
   coordination: {
-    zhTitle: 'Coordination',
-    zhSummary: '用于会话洞察记录与 MCP Task Handoff 的协调域，衔接大语言模型的规划与执行。',
-    zhScenarios: ['Task Handoff 任务交接', '记录会话深度分析结论'],
+    zhTitle: '协调',
+    zhSummary:
+      '用于会话洞察记录、MCP Task Handoff 与跨 Agent 共享状态板的协调域，衔接大语言模型的规划与执行。',
+    zhScenarios: ['Task Handoff 任务交接', '记录会话深度分析结论', '跨 Agent 数据共享与状态广播'],
     zhCombos: ['coordination + workflow', 'coordination + browser'],
     enTitle: 'Coordination',
     enSummary:
-      'Coordination domain for session insights and MCP Task Handoff, bridging the planning and execution boundaries of LLMs.',
-    enScenarios: ['MCP Task Handoff', 'Recording deep session insights'],
+      'Coordination domain for session insights, MCP Task Handoff, and cross-agent shared state board, bridging the planning and execution boundaries of LLMs.',
+    enScenarios: [
+      'MCP Task Handoff',
+      'Recording deep session insights',
+      'Cross-agent data sharing and state broadcasting',
+    ],
     enCombos: ['coordination + workflow', 'coordination + browser'],
   },
-  'shared-state-board': {
-    zhTitle: 'Shared State Board',
-    zhSummary: '跨 Agent 状态同步域，提供全局共享的状态板用于多 Agent 协作。',
-    zhScenarios: ['跨 Agent 数据共享', '多 Agent 工作流协调', '实时状态广播'],
-    zhCombos: ['shared-state-board + coordination', 'shared-state-board + workflow'],
-    enTitle: 'Shared State Board',
-    enSummary:
-      'Cross-agent state synchronization domain providing a global shared state board for multi-agent collaboration.',
-    enScenarios: [
-      'Cross-agent data sharing',
-      'Multi-agent workflow coordination',
-      'Real-time state broadcasting',
-    ],
-    enCombos: ['shared-state-board + coordination', 'shared-state-board + workflow'],
-  },
   debugger: {
-    zhTitle: 'Debugger',
-    zhSummary: '基于 CDP 的断点、单步、调用栈、watch 与调试会话管理域。',
-    zhScenarios: ['断点调试', '调用帧求值', '调试会话保存/恢复'],
-    zhCombos: ['debugger + hooks', 'debugger + antidebug'],
+    zhTitle: '调试器',
+    zhSummary: '基于 CDP 的断点、单步、调用栈、watch、调试会话管理与反反调试域。',
+    zhScenarios: ['断点调试', '调用帧求值', '调试会话保存/恢复', '反调试绕过'],
+    zhCombos: ['debugger + browser', 'debugger + instrumentation'],
     enTitle: 'Debugger',
     enSummary:
-      'CDP-based debugging domain covering breakpoints, stepping, call stacks, watches, and debugger sessions.',
+      'CDP-based debugging domain covering breakpoints, stepping, call stacks, watches, debugger sessions, and anti-anti-debug.',
     enScenarios: [
       'Set and hit breakpoints',
       'Evaluate expressions in frames',
       'Save and restore debugger sessions',
+      'Bypass anti-debugging protections',
     ],
-    enCombos: ['debugger + hooks', 'debugger + antidebug'],
+    enCombos: ['debugger + browser', 'debugger + instrumentation'],
   },
   encoding: {
-    zhTitle: 'Encoding',
+    zhTitle: '编码',
     zhSummary: '二进制格式检测、编码转换、熵分析与 protobuf 原始解码。',
     zhScenarios: ['payload 判型', '编码互转', '未知 protobuf 粗解码'],
     zhCombos: ['network + encoding'],
@@ -148,7 +109,7 @@ const META = {
     enCombos: ['network + encoding'],
   },
   graphql: {
-    zhTitle: 'GraphQL',
+    zhTitle: '图查询',
     zhSummary: 'GraphQL 发现、提取、重放与 introspection 能力。',
     zhScenarios: ['Schema 枚举', '网络中提取 query/mutation', 'GraphQL 重放'],
     zhCombos: ['network + graphql'],
@@ -161,56 +122,48 @@ const META = {
     ],
     enCombos: ['network + graphql'],
   },
-  hooks: {
-    zhTitle: 'Hooks',
-    zhSummary: 'AI Hook 生成、注入、数据导出，以及内置/自定义 preset 管理。',
-    zhScenarios: ['函数调用采集', '运行时证据留存', '团队专用 inline preset'],
-    zhCombos: ['browser + hooks + debugger'],
-    enTitle: 'Hooks',
-    enSummary: 'AI hook generation, injection, export, and built-in/custom preset management.',
-    enScenarios: [
-      'Capture function calls',
-      'Persist runtime evidence',
-      'Install team-specific inline presets',
-    ],
-    enCombos: ['browser + hooks + debugger'],
-  },
   instrumentation: {
-    zhTitle: 'Instrumentation',
-    zhSummary: '统一仪器化会话域，将 Hook、拦截、Trace 与产物记录收束到可查询的 session 中。',
+    zhTitle: '仪器化',
+    zhSummary:
+      '统一仪器化会话域，将 Hook、拦截、Trace、证据图与产物记录收束到可查询的 session 中。',
     zhScenarios: [
       '创建/销毁 instrumentation 会话',
       '登记 Hook / 拦截 / Trace 操作',
       '记录并查询运行时产物',
+      'AI Hook 生成与 preset 管理',
+      '逆向证据图溯源',
     ],
-    zhCombos: ['instrumentation + hooks + network', 'instrumentation + evidence'],
+    zhCombos: ['instrumentation + network', 'instrumentation + browser'],
     enTitle: 'Instrumentation',
     enSummary:
-      'Unified instrumentation-session domain that groups hooks, intercepts, traces, and artifacts into a queryable session.',
+      'Unified instrumentation-session domain that groups hooks, intercepts, traces, evidence graphs, and artifacts into a queryable session.',
     enScenarios: [
       'Create and destroy instrumentation sessions',
       'Register hook, intercept, and trace operations',
       'Record and query runtime artifacts',
+      'AI hook generation and preset management',
+      'Evidence graph provenance traversal',
     ],
-    enCombos: ['instrumentation + hooks + network', 'instrumentation + evidence'],
+    enCombos: ['instrumentation + network', 'instrumentation + browser'],
   },
   maintenance: {
-    zhTitle: 'Maintenance',
-    zhSummary: '运维与维护域，覆盖缓存、token 预算、环境诊断、产物清理与扩展管理。',
-    zhScenarios: ['依赖诊断', '产物清理', '扩展热加载'],
+    zhTitle: '维护',
+    zhSummary: '运维与维护域，覆盖缓存、token 预算、环境诊断、产物清理、扩展管理与安全沙箱执行。',
+    zhScenarios: ['依赖诊断', '产物清理', '扩展热加载', '安全脚本执行'],
     zhCombos: ['maintenance + workflow', 'maintenance + extensions'],
     enTitle: 'Maintenance',
     enSummary:
-      'Operations and maintenance domain covering cache hygiene, token budget, environment diagnostics, artifact cleanup, and extension management.',
+      'Operations and maintenance domain covering cache hygiene, token budget, environment diagnostics, artifact cleanup, extension management, and secure sandbox execution.',
     enScenarios: [
       'Diagnose dependencies',
       'Clean retained artifacts',
       'Reload plugins and workflows',
+      'Execute custom scripts in a secure sandbox',
     ],
     enCombos: ['maintenance + workflow', 'maintenance + extensions'],
   },
   memory: {
-    zhTitle: 'Memory',
+    zhTitle: '内存',
     zhSummary: '面向原生内存扫描、指针链分析、结构体推断与断点观测的内存分析域。',
     zhScenarios: ['首扫/缩扫定位目标值', '指针链与结构体分析', '内存断点与扫描会话管理'],
     zhCombos: ['memory + process', 'memory + debugger', 'memory + workflow'],
@@ -225,7 +178,7 @@ const META = {
     enCombos: ['memory + process', 'memory + debugger', 'memory + workflow'],
   },
   network: {
-    zhTitle: 'Network',
+    zhTitle: '网络',
     zhSummary: '请求捕获、响应体读取、HAR 导出、请求重放与性能追踪。',
     zhScenarios: ['抓包', '认证提取', '请求重放', '性能 trace'],
     zhCombos: ['browser + network', 'network + workflow'],
@@ -241,7 +194,7 @@ const META = {
     enCombos: ['browser + network', 'network + workflow'],
   },
   platform: {
-    zhTitle: 'Platform',
+    zhTitle: '平台',
     zhSummary: '宿主平台与包格式分析域，覆盖 miniapp、asar、Electron。',
     zhScenarios: ['小程序包分析', 'Electron 结构检查'],
     zhCombos: ['platform + process', 'platform + core'],
@@ -252,7 +205,7 @@ const META = {
     enCombos: ['platform + process', 'platform + core'],
   },
   process: {
-    zhTitle: 'Process',
+    zhTitle: '进程',
     zhSummary:
       '进程、模块、内存诊断与受控注入域，适合宿主级分析、故障排查与 Windows 进程实验场景。',
     zhScenarios: [
@@ -272,7 +225,7 @@ const META = {
     enCombos: ['process + debugger', 'process + platform'],
   },
   sourcemap: {
-    zhTitle: 'SourceMap',
+    zhTitle: '源映射',
     zhSummary: 'SourceMap 发现、抓取、解析与源码树重建。',
     zhScenarios: ['自动发现 sourcemap', '恢复源码树'],
     zhCombos: ['core + sourcemap'],
@@ -282,7 +235,7 @@ const META = {
     enCombos: ['core + sourcemap'],
   },
   streaming: {
-    zhTitle: 'Streaming',
+    zhTitle: '流式',
     zhSummary: 'WebSocket 与 SSE 监控域。',
     zhScenarios: ['WS 帧采集', 'SSE 事件监控'],
     zhCombos: ['browser + streaming + network'],
@@ -292,7 +245,7 @@ const META = {
     enCombos: ['browser + streaming + network'],
   },
   transform: {
-    zhTitle: 'Transform',
+    zhTitle: '变换',
     zhSummary: 'AST/字符串变换与加密实现抽取、测试、对比域。',
     zhScenarios: ['变换预览', '加密函数抽取', '实现差异比对'],
     zhCombos: ['core + transform'],
@@ -318,22 +271,23 @@ const META = {
     enCombos: ['browser + wasm', 'core + wasm'],
   },
   workflow: {
-    zhTitle: 'Workflow',
-    zhSummary: '复合工作流与脚本库域，是 built-in 高层编排入口。',
-    zhScenarios: ['一键 API 采集', '注册与验证流程', '批量探测与 bundle 搜索'],
+    zhTitle: '工作流',
+    zhSummary: '复合工作流、脚本库与宏编排域，是 built-in 高层编排入口。',
+    zhScenarios: ['一键 API 采集', '注册与验证流程', '批量探测与 bundle 搜索', '多步宏编排'],
     zhCombos: ['workflow + browser + network'],
     enTitle: 'Workflow',
     enSummary:
-      'Composite workflow and script-library domain; the main built-in orchestration layer.',
+      'Composite workflow, script-library, and macro-orchestration domain; the main built-in orchestration layer.',
     enScenarios: [
       'Capture APIs end-to-end',
       'Register and verify accounts',
       'Probe endpoints and inspect bundles',
+      'Chain multi-step macro workflows',
     ],
     enCombos: ['workflow + browser + network'],
   },
   trace: {
-    zhTitle: 'Trace',
+    zhTitle: '追踪',
     zhSummary: '时间旅行调试域，录制 CDP 事件并写入 SQLite，支持 SQL 查询与堆快照对比。',
     zhScenarios: ['录制浏览器事件', 'SQL 查询跟踪数据', '堆快照差异对比'],
     zhCombos: ['trace + debugger + browser'],
@@ -343,56 +297,32 @@ const META = {
     enScenarios: ['Record browser events', 'Query trace data with SQL', 'Diff heap snapshots'],
     enCombos: ['trace + debugger + browser'],
   },
-  macro: {
-    zhTitle: 'Macro',
-    zhSummary: '子代理宏编排域，将多步工具调用组合为可复用的宏流程。',
-    zhScenarios: ['多步反混淆流程', '自动化分析管线', '用户自定义宏'],
-    zhCombos: ['macro + core + transform'],
-    enTitle: 'Macro',
-    enSummary:
-      'Sub-agent macro orchestration domain that chains multiple tool calls into reusable macro workflows.',
-    enScenarios: [
-      'Multi-step deobfuscation',
-      'Automated analysis pipelines',
-      'User-defined macros',
-    ],
-    enCombos: ['macro + core + transform'],
-  },
-  sandbox: {
-    zhTitle: 'Sandbox',
-    zhSummary: '基于 QuickJS WASM 的安全沙箱域，支持执行自定义脚本并调用 MCP 工具。',
-    zhScenarios: ['安全脚本执行', '自定义分析逻辑', '隔离环境中的代码测试'],
-    zhCombos: ['sandbox + core + transform'],
-    enTitle: 'Sandbox',
-    enSummary:
-      'WASM-isolated QuickJS sandbox domain for secure custom script execution with MCP tool access.',
-    enScenarios: ['Secure script execution', 'Custom analysis logic', 'Isolated code testing'],
-    enCombos: ['sandbox + core + transform'],
-  },
   canvas: {
-    zhTitle: 'Canvas',
+    zhTitle: '画布引擎',
     zhSummary:
-      '游戏引擎 Canvas 逆向分析域，支持 Laya/Pixi/Phaser/Cocos/Unity 等主流游戏引擎的指纹识别、场景树导出和对象拾取。',
+      '游戏引擎 Canvas 逆向分析域与 Skia 渲染引擎捕获域，支持 Laya/Pixi/Phaser/Cocos/Unity 等主流游戏引擎的指纹识别、场景树导出、对象拾取，以及 Skia GPU 后端检测与场景提取。',
     zhScenarios: [
       '游戏引擎识别与版本检测',
       '场景节点树导出',
       '坐标拾取游戏对象',
       '点击事件链路追踪',
+      'Skia GPU 后端检测与场景提取',
     ],
-    zhCombos: ['browser + canvas + debugger', 'canvas + evidence + trace'],
+    zhCombos: ['browser + canvas + debugger', 'canvas + trace'],
     enTitle: 'Canvas',
     enSummary:
-      'Canvas game engine reverse analysis domain supporting Laya, Pixi, Phaser, Cocos, and Unity engines for fingerprinting, scene tree dumping, and object picking.',
+      'Canvas game engine reverse analysis domain plus Skia rendering capture, supporting Laya, Pixi, Phaser, Cocos, and Unity engines for fingerprinting, scene tree dumping, object picking, and Skia GPU backend detection and scene extraction.',
     enScenarios: [
       'Game engine fingerprinting and version detection',
       'Scene node tree export',
       'Coordinate-based object picking',
       'Click event handler tracing',
+      'Skia GPU backend detection and scene extraction',
     ],
-    enCombos: ['browser + canvas + debugger', 'canvas + evidence + trace'],
+    enCombos: ['browser + canvas + debugger', 'canvas + trace'],
   },
   'protocol-analysis': {
-    zhTitle: 'Protocol Analysis',
+    zhTitle: '协议分析',
     zhSummary: '自定义协议分析域，支持协议模式定义、自动字段检测、状态机推断和可视化。',
     zhScenarios: [
       '自定义协议模式定义',
@@ -413,7 +343,7 @@ const META = {
     enCombos: ['network + protocol-analysis', 'encoding + protocol-analysis'],
   },
   'adb-bridge': {
-    zhTitle: 'ADB Bridge',
+    zhTitle: 'ADB 桥接',
     zhSummary: 'Android Debug Bridge 集成域，用于设备管理、应用分析和远程调试。',
     zhScenarios: ['Android 设备管理', 'APK 分析', '远程调试'],
     zhCombos: ['adb-bridge + process', 'adb-bridge + network'],
@@ -424,18 +354,23 @@ const META = {
     enCombos: ['adb-bridge + process', 'adb-bridge + network'],
   },
   'binary-instrument': {
-    zhTitle: 'Binary Instrument',
-    zhSummary: '二进制插桩域，提供二进制分析和运行时插桩能力。',
-    zhScenarios: ['二进制分析', '运行时插桩', '内存模式检测'],
+    zhTitle: '二进制插桩',
+    zhSummary: '二进制插桩域，提供二进制分析、运行时插桩、APK 加固识别与密钥候选扫描能力。',
+    zhScenarios: ['二进制分析', '运行时插桩', 'APK 加固层识别', '硬编码密钥候选检测'],
     zhCombos: ['binary-instrument + memory', 'binary-instrument + process'],
     enTitle: 'Binary Instrument',
     enSummary:
-      'Binary instrumentation domain providing binary analysis and runtime instrumentation capabilities.',
-    enScenarios: ['Binary analysis', 'Runtime instrumentation', 'Memory pattern detection'],
+      'Binary instrumentation domain providing binary analysis, runtime instrumentation, APK packer identification, and hardcoded key candidate scanning.',
+    enScenarios: [
+      'Binary analysis',
+      'Runtime instrumentation',
+      'APK packer-layer identification',
+      'Hardcoded key candidate detection',
+    ],
     enCombos: ['binary-instrument + memory', 'binary-instrument + process'],
   },
   'boringssl-inspector': {
-    zhTitle: 'BoringSSL Inspector',
+    zhTitle: 'BoringSSL 检查',
     zhSummary: 'BoringSSL/TLS 检查域，支持 TLS 流量分析和证书检查。',
     zhScenarios: ['TLS 流量分析', '证书解析', '密钥日志捕获'],
     zhCombos: ['boringssl-inspector + network', 'boringssl-inspector + browser'],
@@ -445,8 +380,52 @@ const META = {
     enScenarios: ['TLS traffic analysis', 'Certificate parsing', 'Key log capture'],
     enCombos: ['boringssl-inspector + network', 'boringssl-inspector + browser'],
   },
+  'dart-inspector': {
+    zhTitle: 'Dart 检查',
+    zhSummary:
+      '从 Flutter AOT libapp.so 中抽取并分类字符串、还原 Smi 整数常量，并使用开发者提供的混淆映射反查原始符号。',
+    zhScenarios: [
+      'Flutter 应用逆向',
+      'libapp.so 字符串审计',
+      'Smi 整数常量恢复',
+      '混淆符号反查（obfuscation-map.json）',
+    ],
+    zhCombos: ['dart-inspector + binary-instrument', 'dart-inspector + adb-bridge'],
+    enTitle: 'Dart Inspector',
+    enSummary:
+      'Extract and classify strings, recover Smi integer constants, and resolve obfuscated identifiers from Flutter AOT libapp.so using a developer-supplied obfuscation map.',
+    enScenarios: [
+      'Flutter app reversing',
+      'libapp.so string audit',
+      'Smi integer constant recovery',
+      'Obfuscation map symbol lookup',
+    ],
+    enCombos: ['dart-inspector + binary-instrument', 'dart-inspector + adb-bridge'],
+  },
+  'native-emulator': {
+    zhTitle: '原生仿真',
+    zhSummary:
+      '进程内、零外部依赖的自研 ARM64 解释器，用于仿真执行 Android `.so`：加载共享库、注册模拟 Java 方法、调用导出函数或 `Java_*` JNI 入口，以还原签名/加密算法。无需真机、JVM 或 Frida。会话隔离且显式管理（create→…→destroy），空闲自动过期防泄漏。libapp.so（Flutter Dart AOT）不在此执行，应交给 Dart 层。',
+    zhScenarios: [
+      'native/JNI 签名与加密算法还原',
+      '从 APK 抽取并加载 arm64-v8a .so',
+      '逐指令跟踪混淆 native 函数',
+      '模拟 Java 世界回调（声明式常量）',
+    ],
+    zhCombos: ['native-emulator + binary-instrument', 'native-emulator + dart-inspector'],
+    enTitle: 'Native Emulator',
+    enSummary:
+      'In-process, dependency-free self-built ARM64 interpreter for emulating Android `.so` libraries: load a shared object, register mock Java methods, and invoke exported or `Java_*` JNI functions to recover signing/crypto algorithms — no device, JVM, or Frida. Sessions are isolated and explicitly managed (create → … → destroy) with idle auto-expiry. libapp.so (Flutter Dart AOT) is not executable here and routes to the Dart layer.',
+    enScenarios: [
+      'Recover native/JNI signing and crypto algorithms',
+      'Extract and load arm64-v8a .so from an APK',
+      'Instruction-trace an obfuscated native function',
+      'Mock the Java world via declarative callbacks',
+    ],
+    enCombos: ['native-emulator + binary-instrument', 'native-emulator + dart-inspector'],
+  },
   'extension-registry': {
-    zhTitle: 'Extension Registry',
+    zhTitle: '扩展注册',
     zhSummary: '扩展注册域，管理和发现社区扩展。',
     zhScenarios: ['扩展浏览', '扩展安装', '扩展版本管理'],
     zhCombos: ['extension-registry + workflow', 'extension-registry + maintenance'],
@@ -470,7 +449,7 @@ const META = {
     enCombos: ['mojo-ipc + browser', 'mojo-ipc + network'],
   },
   netproto: {
-    zhTitle: 'NetProto',
+    zhTitle: '网络协议',
     zhSummary: '网络协议分析域，专注于网络层协议逆向和模式识别。',
     zhScenarios: ['自定义协议分析', '网络模式识别', '协议指纹'],
     zhCombos: ['netproto + network', 'netproto + protocol-analysis'],
@@ -484,33 +463,19 @@ const META = {
     ],
     enCombos: ['netproto + network', 'netproto + protocol-analysis'],
   },
-  'skia-capture': {
-    zhTitle: 'Skia Capture',
-    zhSummary: 'Skia 渲染引擎捕获域，用于 UI 渲染分析和可视化。',
-    zhScenarios: ['Skia 场景提取', '渲染管道分析', 'UI 组件识别'],
-    zhCombos: ['skia-capture + browser', 'skia-capture + canvas'],
-    enTitle: 'Skia Capture',
-    enSummary: 'Skia rendering engine capture domain for UI rendering analysis and visualization.',
-    enScenarios: [
-      'Skia scene extraction',
-      'Rendering pipeline analysis',
-      'UI component identification',
-    ],
-    enCombos: ['skia-capture + browser', 'skia-capture + canvas'],
-  },
   'syscall-hook': {
-    zhTitle: 'Syscall Hook',
+    zhTitle: '系统调用挂钩',
     zhSummary: '系统调用挂钩域，提供系统调用监控和映射能力。',
     zhScenarios: ['系统调用监控', 'API 挂钩', '行为分析'],
-    zhCombos: ['syscall-hook + process', 'syscall-hook + hooks'],
+    zhCombos: ['syscall-hook + process', 'syscall-hook + instrumentation'],
     enTitle: 'Syscall Hook',
     enSummary:
       'System call hooking domain providing system call monitoring and mapping capabilities.',
     enScenarios: ['System call monitoring', 'API hooking', 'Behavioral analysis'],
-    enCombos: ['syscall-hook + process', 'syscall-hook + hooks'],
+    enCombos: ['syscall-hook + process', 'syscall-hook + instrumentation'],
   },
   'v8-inspector': {
-    zhTitle: 'V8 Inspector',
+    zhTitle: 'V8 检查器',
     zhSummary: 'V8 检查器域，提供堆快照分析、CPU 分析和内存检查。',
     zhScenarios: ['堆快照分析', 'CPU 性能分析', '内存泄漏检测'],
     zhCombos: ['v8-inspector + browser', 'v8-inspector + debugger'],
@@ -521,10 +486,10 @@ const META = {
     enCombos: ['v8-inspector + browser', 'v8-inspector + debugger'],
   },
   'cross-domain': {
-    zhTitle: 'Cross-Domain',
+    zhTitle: '跨域关联',
     zhSummary: '跨域关联域，将多个域的分析结果进行交叉关联，支持自动化工作流编排与证据图桥接。',
     zhScenarios: ['跨域证据关联', '自动化逆向工作流', '多信号源聚合分析'],
-    zhCombos: ['cross-domain + evidence', 'cross-domain + v8-inspector + skia-capture'],
+    zhCombos: ['cross-domain + instrumentation', 'cross-domain + v8-inspector + canvas'],
     enTitle: 'Cross-Domain',
     enSummary:
       'Cross-domain correlation domain that bridges analysis results across multiple domains, supporting workflow orchestration and evidence graph integration.',
@@ -533,10 +498,10 @@ const META = {
       'Automated reverse engineering workflows',
       'Multi-signal aggregation analysis',
     ],
-    enCombos: ['cross-domain + evidence', 'cross-domain + v8-inspector + skia-capture'],
+    enCombos: ['cross-domain + instrumentation', 'cross-domain + v8-inspector + canvas'],
   },
   proxy: {
-    zhTitle: 'Proxy',
+    zhTitle: '代理',
     zhSummary: '全栈 HTTP/HTTPS 中间人代理域，提供系统级的流量拦截、篡改与应用级挂载配置。',
     zhScenarios: ['全局 HTTP/HTTPS 抓包', '接口 Mock 与转发', 'Android 辅助挂载'],
     zhCombos: ['proxy + network', 'proxy + adb-bridge'],
@@ -589,6 +554,9 @@ async function main() {
     renderOverview(sorted, 'en', workflowPresets),
     'utf8',
   );
+
+  await writeFile(zhSidebarPath, renderSidebarModule(sorted, 'zh'), 'utf8');
+  await writeFile(enSidebarPath, renderSidebarModule(sorted, 'en'), 'utf8');
 
   console.log(`[docs] Generated bilingual reference pages for ${sorted.length} domains`);
 }
@@ -983,7 +951,7 @@ The repository-level \`workflows/*/workflow.js\` tree contributes **${workflowPr
 ## 推荐阅读路径
 
 1. 先看 \`browser / network / workflow\`，建立日常使用路径。
-2. 再看 \`debugger / hooks / streaming\`，理解运行时分析面。
+2. 再看 \`debugger / instrumentation / streaming\`，理解运行时分析面。
 3. 最后看 \`core / sourcemap / transform / wasm / process / platform\`，覆盖更深入的逆向面。
 
 ## 域矩阵
@@ -1010,7 +978,7 @@ The following tool domains are available:
 ## Recommended reading order
 
 1. Start with \`browser / network / workflow\` to understand the day-to-day path.
-2. Continue with \`debugger / hooks / streaming\` for runtime analysis.
+2. Continue with \`debugger / instrumentation / streaming\` for runtime analysis.
 3. Finish with \`core / sourcemap / transform / wasm / process / platform\` for deeper reverse-engineering coverage.
 
 ## Domain matrix
@@ -1124,6 +1092,29 @@ ${combos.map((item) => `- ${item}`).join('\n')}
 | Tool | Description |
 | --- | --- |
 ${allRows}${presetSection}
+`;
+}
+
+function renderSidebarModule(manifests, locale) {
+  const prefix = locale === 'zh' ? '/reference/domains' : '/en/reference/domains';
+  const overviewLink = locale === 'zh' ? '/reference/' : '/en/reference/';
+  const overviewText = locale === 'zh' ? '总览' : 'Overview';
+
+  const items = [
+    `  { text: '${overviewText}', link: '${overviewLink}' },`,
+    ...manifests.map((manifest) => {
+      const meta = getDomainMeta(manifest.domain);
+      const label = locale === 'zh' ? meta.zhTitle : meta.enTitle;
+      return `  { text: '${label}', link: '${prefix}/${manifest.domain}' },`;
+    }),
+  ];
+
+  return `// AUTO-GENERATED BY scripts/generate-vitepress-reference.mjs
+// DO NOT EDIT DIRECTLY
+
+export const referenceSidebarItems = [
+${items.join('\n')}
+];
 `;
 }
 

@@ -84,10 +84,15 @@ function createCtx(overrides: Record<string, unknown> = {}) {
     extensionWorkflowRuntimeById: new Map(),
     activatedToolNames: new Set<string>(),
     activatedRegisteredTools: new Map(),
+    domainTtlEntries: new Map(),
     router: {
+      addHandlers: vi.fn(),
       has: vi.fn(() => false),
       removeHandler: vi.fn(),
     },
+    enabledDomains: new Set<string>(),
+    selectedTools: [],
+    registerSingleTool: vi.fn(() => ({ remove: vi.fn() })),
     executeToolWithTracking: vi.fn(async (name: string, args: Record<string, unknown>) => ({
       content: [{ type: 'text', text: JSON.stringify({ success: true, name, args }) }],
     })),
@@ -103,14 +108,12 @@ describe('ExtensionManager', () => {
   const pluginContextKey = 'pluginCtxForTest';
   const rollbackFlagKey = 'rollbackFlagForTest';
   const activationFlagKey = 'activationFlagForTest';
-  const parsedMetaKey = 'parsedMetaForTest';
 
   beforeEach(() => {
     process.env = { ...originalEnv };
     delete (globalThis as Record<string, unknown>)[pluginContextKey];
     delete (globalThis as Record<string, unknown>)[rollbackFlagKey];
     delete (globalThis as Record<string, unknown>)[activationFlagKey];
-    delete (globalThis as Record<string, unknown>)[parsedMetaKey];
     vi.resetModules();
     vi.clearAllMocks();
     state.parseDigestAllowlist.mockReturnValue(new Set());
@@ -133,10 +136,27 @@ describe('ExtensionManager', () => {
         pluginCount: ctx.extensionPluginsById.size,
         workflowCount: ctx.extensionWorkflowsById.size,
         toolCount: ctx.extensionToolsByName.size,
+        activeToolCount: [...ctx.activatedToolNames].length,
+        currentProfile: ctx.baseTier,
         lastReloadAt: ctx.lastExtensionReloadAt,
         plugins: [...ctx.extensionPluginsById.values()],
         workflows: [...ctx.extensionWorkflowsById.values()],
-        tools: [...ctx.extensionToolsByName.values()],
+        tools: [...ctx.extensionToolsByName.values()].map((record: any) => {
+          const profiles =
+            Array.isArray(record.profiles) && record.profiles.length > 0
+              ? [...record.profiles]
+              : ['full'];
+          return {
+            name: record.name,
+            domain: record.domain,
+            source: record.source,
+            profiles,
+            visibleInCurrentProfile: profiles.includes(ctx.baseTier),
+            active: ctx.activatedToolNames.has(record.name),
+            activationSource: record.activationSource,
+            activatedAt: record.activatedAt,
+          };
+        }),
       }),
     );
     state.extractConfigValue.mockImplementation((ctx: any, path: string, fallback: any) => {
@@ -194,12 +214,8 @@ describe('ExtensionManager', () => {
         export default {
           id: 'plugin-1',
           version: '1.0.0',
-          pluginName: 'Plugin One',
           compatibleCoreRange: '^1.0.0',
           allowedTools: ['allowed_tool', 'missing_builtin'],
-          mergeMetadata() {
-            return this;
-          },
           tools: [],
           workflows: [],
           async onLoadHandler(ctx) {
@@ -286,12 +302,8 @@ describe('ExtensionManager', () => {
           export default {
             id: 'plugin-with-workflow',
             version: '1.0.0',
-            pluginName: 'Plugin With Workflow',
             compatibleCoreRange: '^1.0.0',
             allowedTools: ['allowed_tool'],
-            mergeMetadata() {
-              return this;
-            },
             tools: [],
             workflows: [
               {
@@ -371,7 +383,7 @@ describe('ExtensionManager', () => {
               version: '1.0.0',
               compatibleCoreRange: '^1.0.0',
               allowedTools: [],
-              mergeMetadata() { return this; },
+             
               tools: []
             };
           `);
@@ -382,7 +394,7 @@ describe('ExtensionManager', () => {
             version: '1.0.0',
             compatibleCoreRange: '^1.0.0',
             allowedTools: [],
-            mergeMetadata() { return this; },
+           
             tools: [],
             workflows: []
           };
@@ -394,7 +406,7 @@ describe('ExtensionManager', () => {
 
     await expect(ensureWorkflowsLoaded(ctx)).resolves.toBeUndefined();
     expect(ctx.extensionWorkflowsById.size).toBe(0);
-    expect(ctx.extensionPluginsById.has('plugin-missing-workflows')).toBe(false);
+    expect(ctx.extensionPluginsById.get('plugin-missing-workflows')?.workflows).toEqual([]);
   });
 
   it('warns when loading without an allowlist in non-strict mode', async () => {
@@ -461,6 +473,161 @@ describe('ExtensionManager', () => {
     (lifecycleContext as any).registerMetric('test-metric');
   });
 
+  it('auto-registers extension tools on reload when their profiles include the current base tier', async () => {
+    state.discoverPluginFiles.mockResolvedValue(['/plugins/plugin-visible/dist/index.js']);
+    state.createFreshImportUrl.mockImplementationOnce(() =>
+      makeDataModule(`
+        export default {
+          id: 'plugin-visible',
+          version: '1.0.0',
+          compatibleCoreRange: '^1.0.0',
+          allowedTools: ['allowed_tool'],
+          profiles: ['workflow', 'full'],
+         
+          tools: [
+            {
+              name: 'plugin_visible_tool',
+              description: 'Visible tool',
+              schema: { type: 'object', properties: {} },
+              profiles: ['workflow', 'full'],
+              async handler() {
+                return { content: [{ type: 'text', text: JSON.stringify({ success: true }) }] };
+              },
+            },
+          ],
+          workflows: [],
+        };
+      `),
+    );
+    const ctx = createCtx();
+    const { reloadExtensions } = await import('@server/extensions/ExtensionManager');
+
+    const result = await reloadExtensions(ctx);
+    const record = ctx.extensionToolsByName.get('plugin_visible_tool');
+
+    expect(result.addedTools).toBe(1);
+    expect(result.autoActivatedTools).toEqual(['plugin_visible_tool']);
+    expect(record?.registeredTool).toBeDefined();
+    expect(record?.activationSource).toBe('reload');
+    expect(record?.activatedAt).toEqual(expect.any(String));
+    expect(ctx.activatedToolNames.has('plugin_visible_tool')).toBe(true);
+    expect(ctx.activatedRegisteredTools.has('plugin_visible_tool')).toBe(true);
+    expect(ctx.enabledDomains.has('plugin:plugin-visible')).toBe(true);
+    expect(ctx.registerSingleTool).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'plugin_visible_tool' }),
+    );
+    expect(ctx.router.addHandlers).toHaveBeenCalledWith({
+      plugin_visible_tool: expect.any(Function),
+    });
+    expect(ctx.server.sendToolListChanged).toHaveBeenCalledOnce();
+  });
+
+  it('uses meta.yaml as the outward metadata source for plugin records', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const tmpDir = path.resolve(__dirname, '../../tmp/fixtures', 'ext-mgr-meta-ssot');
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'meta.yaml'),
+      [
+        'name: Meta Plugin',
+        'description: Meta description',
+        'author: Meta Author',
+        'source_repo: https://example.com/meta-plugin',
+      ].join('\n'),
+    );
+
+    state.discoverPluginFiles.mockResolvedValue([path.join(tmpDir, 'manifest.ts')]);
+    state.createFreshImportUrl.mockImplementationOnce(() =>
+      makeDataModule(`
+        export default {
+          id: 'plugin-meta-ssot',
+          version: '1.0.0',
+          compatibleCoreRange: '^1.0.0',
+          allowedTools: [],
+         
+          tools: [],
+          workflows: [],
+        };
+      `),
+    );
+
+    const ctx = createCtx();
+    const { reloadExtensions } = await import('@server/extensions/ExtensionManager');
+    await reloadExtensions(ctx);
+
+    expect(ctx.extensionPluginsById.get('plugin-meta-ssot')).toMatchObject({
+      id: 'plugin-meta-ssot',
+      name: 'Meta Plugin',
+      description: 'Meta description',
+      author: 'Meta Author',
+      sourceRepo: 'https://example.com/meta-plugin',
+    });
+  });
+
+  it('reports extension tool visibility and activation state through buildListResult', async () => {
+    state.discoverPluginFiles.mockResolvedValue(['/plugins/plugin-visible/dist/index.js']);
+    state.createFreshImportUrl.mockImplementationOnce(() =>
+      makeDataModule(`
+        export default {
+          id: 'plugin-visible',
+          version: '1.0.0',
+          compatibleCoreRange: '^1.0.0',
+          allowedTools: ['allowed_tool'],
+          profiles: ['workflow', 'full'],
+          tools: [
+            {
+              name: 'plugin_visible_tool',
+              description: 'Visible tool',
+              schema: { type: 'object', properties: {} },
+              profiles: ['workflow', 'full'],
+              async handler() {
+                return { content: [{ type: 'text', text: JSON.stringify({ success: true }) }] };
+              }
+            },
+            {
+              name: 'plugin_hidden_tool',
+              description: 'Hidden tool',
+              schema: { type: 'object', properties: {} },
+              profiles: ['full'],
+              async handler() {
+                return { content: [{ type: 'text', text: JSON.stringify({ success: true }) }] };
+              }
+            }
+          ],
+          workflows: [],
+        };
+      `),
+    );
+    const ctx = createCtx();
+    const { reloadExtensions } = await import('@server/extensions/ExtensionManager');
+    const { buildListResult } = await import('@server/extensions/ExtensionManager.lifecycle');
+
+    await reloadExtensions(ctx);
+    const result = buildListResult(ctx, ['resolved:plugins'], ['resolved:workflows']);
+
+    expect(result.currentProfile).toBe('workflow');
+    expect(result.activeToolCount).toBe(1);
+    expect(result.tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'plugin_visible_tool',
+          profiles: ['workflow', 'full'],
+          visibleInCurrentProfile: true,
+          active: true,
+          activationSource: 'reload',
+        }),
+        expect.objectContaining({
+          name: 'plugin_hidden_tool',
+          profiles: ['full'],
+          visibleInCurrentProfile: false,
+          active: false,
+          activationSource: undefined,
+        }),
+      ]),
+    );
+  });
+
   it('registers plugin-contributed workflows and associates them with the plugin record', async () => {
     state.discoverPluginFiles.mockResolvedValue(['/plugins/plugin-with-workflow/dist/index.js']);
     state.discoverWorkflowFiles.mockResolvedValue([]);
@@ -471,12 +638,8 @@ describe('ExtensionManager', () => {
           export default {
             id: 'plugin-with-workflow',
             version: '1.0.0',
-            pluginName: 'Plugin With Workflow',
             compatibleCoreRange: '^1.0.0',
             allowedTools: ['allowed_tool'],
-            mergeMetadata() {
-              return this;
-            },
             tools: [],
             workflows: [
               {
@@ -525,12 +688,8 @@ describe('ExtensionManager', () => {
         export default {
           id: 'plugin-1',
           version: '1.0.0',
-          pluginName: 'Plugin One',
           compatibleCoreRange: '^1.0.0',
           allowedTools: ['allowed_tool', 'missing_builtin'],
-          mergeMetadata() {
-            return this;
-          },
           tools: [],
           workflows: [],
           async onLoadHandler(ctx) {
@@ -569,12 +728,8 @@ describe('ExtensionManager', () => {
         export default {
           id: 'plugin-bad',
           version: '1.0.0',
-          pluginName: 'Plugin Bad',
           compatibleCoreRange: '^1.0.0',
           allowedTools: ['*'],
-          mergeMetadata() {
-            return this;
-          },
           tools: [],
           workflows: [],
           async onActivateHandler() {
@@ -619,10 +774,9 @@ describe('ExtensionManager', () => {
         export default {
           id: 'plugin-invalid',
           version: '1.0.0',
-          pluginName: 'Plugin Invalid',
           compatibleCoreRange: '^1.0.0',
           allowedTools: ['*'],
-          mergeMetadata() { return this; },
+         
           tools: [],
           workflows: [],
           async onValidateHandler() {
@@ -645,10 +799,9 @@ describe('ExtensionManager', () => {
         export default {
           id: 'plugin-rollback',
           version: '1.0.0',
-          pluginName: 'Plugin Rollback',
           compatibleCoreRange: '^1.0.0',
           allowedTools: ['*'],
-          mergeMetadata() { return this; },
+         
           tools: [],
           workflows: [],
           async onActivateHandler() {
@@ -679,10 +832,9 @@ describe('ExtensionManager', () => {
         export default {
           id: 'plugin-deactivate-fail',
           version: '1.0.0',
-          pluginName: 'Plugin Deactivate Fail',
           compatibleCoreRange: '^1.0.0',
           allowedTools: ['*'],
-          mergeMetadata() { return this; },
+         
           tools: [],
           workflows: [],
           async onActivateHandler() {},
@@ -708,7 +860,7 @@ describe('ExtensionManager', () => {
     );
   });
 
-  it('parses meta.yaml successfully and skips invalid lines', async () => {
+  it('parses meta.yaml successfully and uses valid outward metadata lines only', async () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const tmpDir = path.resolve(__dirname, '../../tmp/fixtures', 'ext-mgr-yaml');
@@ -729,9 +881,6 @@ describe('ExtensionManager', () => {
           allowedTools: [],
           tools: [],
           workflows: [],
-          mergeMetadata(meta) { 
-            globalThis.parsedMetaForTest = meta; 
-          },
         };
       `),
     );
@@ -739,9 +888,9 @@ describe('ExtensionManager', () => {
     const { reloadExtensions } = await import('@server/extensions/ExtensionManager');
     await reloadExtensions(ctx);
 
-    expect((globalThis as any)[parsedMetaKey]).toEqual({
-      valid: 'value',
-      good: 'ok',
+    expect(ctx.extensionPluginsById.get('plugin-yaml')).toMatchObject({
+      id: 'plugin-yaml',
+      name: 'plugin-yaml',
     });
   });
 
@@ -816,7 +965,7 @@ describe('ExtensionManager', () => {
           return makeDataModule(`
           export default {
             id: 'plugin-${idStr}', version: '1.0.0', compatibleCoreRange: '^1.0',
-            allowedTools: ['allowed_tool'], mergeMetadata() { return this; },
+            allowedTools: ['allowed_tool'],
             tools: [], workflows: [], async onLoadHandler(lCtx) {
               await lCtx.invokeTool('allowed_tool', null);
               await lCtx.invokeTool('allowed_tool'); 
@@ -828,7 +977,7 @@ describe('ExtensionManager', () => {
           return makeDataModule(`
           export default {
             id: 'plugin-valid-workflow', version: '1.0.0', compatibleCoreRange: '^1.0',
-            allowedTools: [], mergeMetadata() { return this; },
+            allowedTools: [],
             tools: [], 
             workflows: [
               'this-is-not-an-object',
@@ -845,7 +994,7 @@ describe('ExtensionManager', () => {
         return makeDataModule(`
         export default {
           id: 'plugin-${idStr.replace('plugin-', '')}', version: '1.0.0', compatibleCoreRange: '^1.0',
-          allowedTools: [], mergeMetadata() { return this; },
+          allowedTools: [],
           tools: [], workflows: ['this-is-not-an-object'],
         };
       `);
@@ -868,7 +1017,7 @@ describe('ExtensionManager', () => {
     const result = await reloadExtensions(ctx);
 
     expect(state.logger.warn).toHaveBeenCalledWith(
-      'sendToolListChanged failed after extension reload:',
+      expect.stringContaining('sendToolListChanged failed after extension reload:'),
       expect.any(Error),
     );
     expect(result.errors).toContain('integrity boom');

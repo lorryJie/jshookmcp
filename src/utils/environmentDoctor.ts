@@ -1,6 +1,8 @@
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { ToolRegistry } from '@modules/external/ToolRegistry';
 import { GHIDRA_BRIDGE_ENDPOINT, IDA_BRIDGE_ENDPOINT } from '@src/constants';
 import { getProjectRoot } from '@utils/outputPaths';
@@ -48,6 +50,27 @@ function getSharedRegistry(): ToolRegistry {
     sharedRegistryTimestamp = now;
   }
   return sharedRegistry;
+}
+
+function resolvePackageJsonPath(packageName: string): string {
+  let currentDir = dirname(require.resolve(packageName));
+
+  while (true) {
+    const packageJsonPath = join(currentDir, 'package.json');
+    if (existsSync(packageJsonPath)) {
+      return packageJsonPath;
+    }
+
+    const parentDir = dirname(currentDir);
+    if (parentDir === currentDir) {
+      throw new Error(`Could not locate package.json for ${packageName}`);
+    }
+    currentDir = parentDir;
+  }
+}
+
+function readInstalledPackageJson(packageName: string): { version?: string } {
+  return require(resolvePackageJsonPath(packageName)) as { version?: string };
 }
 
 export async function runEnvironmentDoctor(options?: {
@@ -189,8 +212,7 @@ export function formatEnvironmentDoctorReport(report: EnvironmentDoctorReport): 
 
 function checkPackage(packageName: string, missingHint?: string): DoctorCheck {
   try {
-    const packageJsonPath = require.resolve(`${packageName}/package.json`);
-    const packageJson = require(packageJsonPath) as { version?: string };
+    const packageJson = readInstalledPackageJson(packageName);
     return {
       name: packageName,
       status: 'ok',
@@ -261,8 +283,7 @@ function normalizeCorepackCheck(corepack: DoctorCheck, pnpm: DoctorCheck): Docto
  */
 function checkNativeMemory(): DoctorCheck {
   try {
-    const koffiPkg = require.resolve('koffi/package.json');
-    const koffiJson = require(koffiPkg) as { version?: string };
+    const koffiJson = readInstalledPackageJson('koffi');
     const koffiVersion = koffiJson.version ?? 'unknown';
 
     if (process.platform === 'win32') {
@@ -405,7 +426,7 @@ function buildRecommendations(
   if (packages.some((item) => item.name === 'better-sqlite3' && item.status !== 'ok')) {
     recommendations.push(
       'Install or rebuild the optional SQLite trace backend with ' +
-        '`pnpm add -O better-sqlite3@12.6.2` or `npm rebuild better-sqlite3 ' +
+        '`pnpm add -O better-sqlite3@12.10.0` or `npm rebuild better-sqlite3 ' +
         '--foreground-scripts` under the active Node version if you need trace tooling.',
     );
   }

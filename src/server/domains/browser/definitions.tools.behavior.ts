@@ -2,6 +2,12 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { tool } from '@server/registry/tool-builder';
 
 export const behaviorTools: Tool[] = [
+  tool('browser_codegen_start', (t) =>
+    t.desc('Start recording browser actions as replayable steps.').idempotent(),
+  ),
+  tool('browser_codegen_stop', (t) =>
+    t.desc('Stop recording browser actions and return cleaned replay steps.').query(),
+  ),
   tool('captcha_solver_capabilities', (t) =>
     t.desc('Report CAPTCHA solving mode availability.').query(),
   ),
@@ -13,6 +19,8 @@ export const behaviorTools: Tool[] = [
       .number('toX', 'Target X')
       .number('toY', 'Target Y')
       .string('selector', 'CSS selector (alternative to toX/toY)')
+      .string('frameUrl', 'iframe URL substring')
+      .string('frameSelector', 'iframe CSS selector')
       .number('durationMs', 'Duration ms', { default: 600 })
       .number('steps', 'Intermediate points', { default: 24 })
       .number('jitterPx', 'Max jitter px', { default: 1.5 })
@@ -41,6 +49,8 @@ export const behaviorTools: Tool[] = [
       .desc('Type text with human-like speed and occasional typos.')
       .string('selector', 'CSS selector')
       .string('text', 'Text to type')
+      .string('frameUrl', 'iframe URL substring')
+      .string('frameSelector', 'iframe CSS selector')
       .number('wpm', 'Words per minute', { default: 90 })
       .number('errorRate', 'Typo probability per char', {
         default: 0.02,
@@ -59,12 +69,18 @@ export const behaviorTools: Tool[] = [
       .enum('mode', ['external_service', 'manual'], 'Solver mode')
       .string('provider', 'External solver provider')
       .string('apiKey', 'API key')
-      .enum('challengeType', ['image', 'widget', 'browser_check', 'auto'], 'Challenge type', {
-        default: 'auto',
+      .enum('challengeType', ['image', 'widget', 'browser_check'], 'Challenge type', {
+        default: 'image',
       })
       .string('typeHint', 'Legacy alias for challengeType')
+      .enum(
+        'taskKind',
+        ['image', 'recaptcha_v2', 'recaptcha_v3', 'hcaptcha', 'funcaptcha', 'turnstile'],
+        'Explicit solver task kind',
+      )
       .string('siteKey', 'Widget site key')
       .string('pageUrl', 'Page URL')
+      .string('imageBase64', 'Explicit base64 image payload')
       .number('timeoutMs', 'Timeout ms', { default: 180000 })
       .number('maxRetries', 'Max retries', { default: 2 })
       .openWorld(),
@@ -81,6 +97,8 @@ export const behaviorTools: Tool[] = [
       .boolean('injectToken', 'Auto-inject token', {
         default: true,
       })
+      .string('responseSelector', 'Explicit selector to receive the solved token')
+      .string('callbackName', 'Explicit global callback name for hook or injection flows')
       .openWorld(),
   ),
 ];

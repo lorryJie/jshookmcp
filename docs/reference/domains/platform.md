@@ -1,4 +1,4 @@
-# Platform
+# 平台
 
 域名：`platform`
 

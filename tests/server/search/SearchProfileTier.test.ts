@@ -54,6 +54,7 @@ vi.mock('@src/constants', () => ({
   SEARCH_VECTOR_LEARN_DOWN: 0.03,
   SEARCH_VECTOR_LEARN_TOP_N: 5,
   SEARCH_RECENCY_TRACKER_MAX: 200,
+  SEARCH_SELF_RAG_ENABLED: false,
 }));
 
 function topNames(results: { name: string }[], k: number): string[] {
@@ -116,7 +117,14 @@ describe('search/SearchProfileTier', () => {
   it('full tier: no penalty applied', async () => {
     const { ToolSearchEngine } = await import('@server/search/ToolSearchEngineImpl');
     const engine = new ToolSearchEngine();
-    const allDomains = new Set(['browser', 'network', 'debugger', 'analysis', 'hooks', 'memory']);
+    const allDomains = new Set([
+      'browser',
+      'network',
+      'debugger',
+      'analysis',
+      'instrumentation',
+      'memory',
+    ]);
     const results = await engine.search(
       'V8 heap snapshot capture',
       10,

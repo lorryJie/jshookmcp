@@ -7,9 +7,11 @@ import { getToolsByDomains } from '@server/ToolCatalog';
 import { createToolHandlerMap } from '@server/ToolHandlerMap';
 import type { MCPServerContext } from '@server/MCPServer.context';
 import type { ToolResponse } from '@server/types';
+import { registerExtensionToolRecord } from '@server/extensions/ExtensionManager.tools';
 import { getAllKnownDomains, ensureDomainLoaded } from '@server/registry/index';
 import { getActiveToolNames } from '@server/MCPServer.search.helpers';
 import { startDomainTtl } from '@server/MCPServer.activation.ttl';
+import { getRuntimeState } from '@server/runtime/ServerRuntimeState';
 import { ACTIVATION_TTL_MINUTES } from '@src/constants';
 
 export async function handleActivateDomain(
@@ -55,12 +57,13 @@ export async function handleActivateDomain(
   for (const toolDef of domainTools) {
     if (activeNames.has(toolDef.name)) continue;
 
-    const registeredTool = ctx.registerSingleTool(toolDef);
-    ctx.activatedToolNames.add(toolDef.name);
-    ctx.activatedRegisteredTools.set(toolDef.name, registeredTool);
     const extensionRecord = ctx.extensionToolsByName.get(toolDef.name);
     if (extensionRecord) {
-      extensionRecord.registeredTool = registeredTool;
+      registerExtensionToolRecord(ctx, extensionRecord, 'activate_domain');
+    } else {
+      const registeredTool = ctx.registerSingleTool(toolDef);
+      ctx.activatedToolNames.add(toolDef.name);
+      ctx.activatedRegisteredTools.set(toolDef.name, registeredTool);
     }
     activated.push(toolDef.name);
   }
@@ -83,6 +86,7 @@ export async function handleActivateDomain(
 
     // Start TTL timer for this domain activation
     startDomainTtl(ctx, domain, ttlMinutes, activated);
+    getRuntimeState(ctx)?.setPendingDomainActivation(domain, ttlMinutes, activated);
 
     try {
       await ctx.server.sendToolListChanged();
@@ -94,6 +98,11 @@ export async function handleActivateDomain(
   logger.info(
     `activate_domain: domain="${domain}", activated ${activated.length} tools, ttl=${ttlMinutes}min`,
   );
+  ctx.mcpLog.info('jshookmcp', {
+    event: 'domain_activated',
+    domain,
+    toolCount: activated.length,
+  });
 
   return asTextResponse(
     JSON.stringify({

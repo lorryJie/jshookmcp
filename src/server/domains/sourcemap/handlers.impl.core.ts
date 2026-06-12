@@ -5,7 +5,7 @@
  * Handler methods delegated to ExtensionHandlers and SourcemapHandlers sub-handlers.
  */
 
-import type { CodeCollector } from '@server/domains/shared/modules';
+import type { CodeCollector } from '@server/domains/shared/modules/collector';
 import type { SourcemapSharedState } from './handlers/shared';
 import { ExtensionHandlers } from './handlers/extension-handlers';
 import { SourcemapHandlers } from './handlers/sourcemap-handlers';
@@ -33,6 +33,12 @@ export class SourcemapToolHandlers {
   }
   handleSourcemapFetchAndParse(args: Record<string, unknown>) {
     return this.sourcemap.handleSourcemapFetchAndParse(args);
+  }
+  handleSourcemapCoverage(args: Record<string, unknown>) {
+    return this.sourcemap.handleSourcemapCoverage(args);
+  }
+  handleSourcemapLookup(args: Record<string, unknown>) {
+    return this.sourcemap.handleSourcemapLookup(args);
   }
   handleSourcemapReconstructTree(args: Record<string, unknown>) {
     return this.sourcemap.handleSourcemapReconstructTree(args);

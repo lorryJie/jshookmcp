@@ -24,7 +24,11 @@ export const extensionTools: Tool[] = [
     t.desc('List all loaded plugins, workflows, and extension tools.').query(),
   ),
   tool('reload_extensions', (t) =>
-    t.desc('Reload plugins and workflows from configured directories.').openWorld(),
+    t
+      .desc(
+        'Reload plugins and workflows from configured directories, and directly register extension tools visible in the current profile.',
+      )
+      .openWorld(),
   ),
   tool('browse_extension_registry', (t) =>
     t
@@ -54,6 +58,22 @@ export const cacheTools: Tool[] = [
   ),
   tool('clear_all_caches', (t) =>
     t.desc('Clear all internal caches. Destructive — prefer smart_cache_cleanup.').destructive(),
+  ),
+];
+
+// ── Sandbox (merged from the former sandbox domain) ──
+
+export const sandboxTools: Tool[] = [
+  tool('execute_sandbox_script', (t) =>
+    t
+      .desc('Execute JavaScript in an isolated sandbox.')
+      .string('code', 'JavaScript source code to execute inside the sandbox')
+      .string('sessionId', 'Session ID for scratchpad persistence across executions')
+      .number('timeoutMs', 'Execution timeout in ms', { default: 1000 })
+      .boolean('autoCorrect', 'Retry failed scripts up to 2 times with error context', {
+        default: false,
+      })
+      .required('code'),
   ),
 ];
 

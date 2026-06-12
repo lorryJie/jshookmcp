@@ -98,6 +98,7 @@ describe('ExtensionManager.lifecycle', () => {
           'tool-a',
           {
             name: 'tool-a',
+            domain: 'plugin:alpha',
             registeredTool: { remove: removeOk },
           },
         ],
@@ -105,6 +106,7 @@ describe('ExtensionManager.lifecycle', () => {
           'tool-b',
           {
             name: 'tool-b',
+            domain: 'plugin:alpha',
             registeredTool: { remove: removeFail },
           },
         ],
@@ -117,6 +119,18 @@ describe('ExtensionManager.lifecycle', () => {
         ['tool-a', {}],
         ['tool-b', {}],
       ]),
+      domainTtlEntries: new Map([
+        [
+          'plugin:alpha',
+          {
+            timer: setTimeout(() => {}, 60_000),
+            ttlMs: 60_000,
+            toolNames: new Set(['tool-a', 'tool-b']),
+          },
+        ],
+      ]),
+      enabledDomains: new Set(['plugin:alpha']),
+      selectedTools: [],
       router: {
         removeHandler: vi.fn(),
       },
@@ -135,19 +149,33 @@ describe('ExtensionManager.lifecycle', () => {
     expect(ctx.extensionWorkflowRuntimeById.size).toBe(0);
     expect(ctx.activatedToolNames.size).toBe(0);
     expect(ctx.activatedRegisteredTools.size).toBe(0);
+    expect(ctx.domainTtlEntries.size).toBe(0);
+    expect(ctx.enabledDomains.size).toBe(0);
     expect(state.logger.warn).toHaveBeenCalled();
   });
 
   it('builds list results from current extension maps', async () => {
     const { buildListResult } = await import('@server/extensions/ExtensionManager.lifecycle');
     const ctx = {
+      baseTier: 'workflow',
       extensionPluginsById: new Map([['plugin-a', { id: 'plugin-a', name: 'Plugin A' }]]),
       extensionWorkflowsById: new Map([
         ['workflow-a', { id: 'workflow-a', displayName: 'Workflow A' }],
       ]),
       extensionToolsByName: new Map([
-        ['tool-a', { name: 'tool-a', domain: 'browser', source: '/plugin/tool-a' }],
+        [
+          'tool-a',
+          {
+            name: 'tool-a',
+            domain: 'browser',
+            source: '/plugin/tool-a',
+            profiles: ['workflow', 'full'],
+            activationSource: 'reload',
+            activatedAt: '2026-03-15T00:00:01.000Z',
+          },
+        ],
       ]),
+      activatedToolNames: new Set(['tool-a']),
       lastExtensionReloadAt: '2026-03-15T00:00:00.000Z',
     };
 
@@ -157,10 +185,23 @@ describe('ExtensionManager.lifecycle', () => {
       pluginCount: 1,
       workflowCount: 1,
       toolCount: 1,
+      activeToolCount: 1,
+      currentProfile: 'workflow',
       lastReloadAt: '2026-03-15T00:00:00.000Z',
       plugins: [{ id: 'plugin-a', name: 'Plugin A' }],
       workflows: [{ id: 'workflow-a', displayName: 'Workflow A' }],
-      tools: [{ name: 'tool-a', domain: 'browser', source: '/plugin/tool-a' }],
+      tools: [
+        {
+          name: 'tool-a',
+          domain: 'browser',
+          source: '/plugin/tool-a',
+          profiles: ['workflow', 'full'],
+          visibleInCurrentProfile: true,
+          active: true,
+          activationSource: 'reload',
+          activatedAt: '2026-03-15T00:00:01.000Z',
+        },
+      ],
     });
   });
 });

@@ -15,7 +15,8 @@ import {
 } from '@server/MCPServer.search.helpers';
 import { describeTool, generateExampleArgs } from '@server/ToolRouter';
 import { activateToolNames } from '@server/MCPServer.search.handlers.activate';
-import { ACTIVATION_TTL_MINUTES } from '@src/constants';
+import { ACTIVATION_TTL_MINUTES, SEARCH_AUTO_ACTIVATE_DOMAINS } from '@src/constants';
+import { getAllKnownDomains } from '@server/registry/index';
 
 export async function handleSearchTools(
   ctx: MCPServerContext,
@@ -26,13 +27,22 @@ export async function handleSearchTools(
   // Allow opt-out via top_k=0 or explicit flag
   const autoActivate = (args.auto_activate as boolean | undefined) ?? true;
 
+  const searchStart = performance.now();
   const engine = await getSearchEngine(ctx);
   const activeNames = getActiveToolNames(ctx);
   const visibleDomains = getVisibleDomainsForTier(ctx);
-  const results = await engine.search(query, topK, activeNames, visibleDomains, getBaseTier(ctx));
+  let results = await engine.search(query, topK, activeNames, visibleDomains, getBaseTier(ctx));
+  const latencyMs = Math.round(performance.now() - searchStart);
+
+  ctx.mcpLog.info('jshookmcp', {
+    event: 'search_executed',
+    query,
+    resultCount: results.length,
+    latencyMs,
+  });
 
   // Auto-activate top inactive results so they are immediately usable.
-  if (autoActivate && topK > 0) {
+  if (autoActivate && topK > 0 && SEARCH_AUTO_ACTIVATE_DOMAINS) {
     const inactiveResults = results.filter((r) => !r.isActive);
     if (inactiveResults.length > 0) {
       // Collect unique domains from inactive results
@@ -65,6 +75,41 @@ export async function handleSearchTools(
       const names = [...new Set([...remainingInactive, ...toolsWithoutDomain])];
       if (names.length > 0) {
         await activateToolNames(ctx, names);
+      }
+    } else if (results.length === 0) {
+      // No results at all — try fuzzy domain name matching from query tokens
+      const queryLower = query.toLowerCase();
+      const queryTokens = queryLower.split(/[\s\-_.,;:|/(){}[\]]+/).filter((t) => t.length >= 2);
+      const allDomains = [...getAllKnownDomains()];
+      const matchedDomains = allDomains.filter((d) =>
+        queryTokens.some(
+          (t) =>
+            d.includes(t) || t.includes(d.replace(/-/g, '')) || d.replace(/-/g, '').includes(t),
+        ),
+      );
+
+      if (matchedDomains.length > 0) {
+        const { handleActivateDomain } = await import('@server/MCPServer.search.handlers.domain');
+        for (const domain of matchedDomains) {
+          try {
+            await handleActivateDomain(ctx, { domain, ttlMinutes: ACTIVATION_TTL_MINUTES });
+          } catch {
+            /* fall through */
+          }
+        }
+        // Re-run search after domain activation to pick up newly available tools
+        const activeNamesAfter = getActiveToolNames(ctx);
+        const visibleDomainsAfter = getVisibleDomainsForTier(ctx);
+        const retryResults = await engine.search(
+          query,
+          topK,
+          activeNamesAfter,
+          visibleDomainsAfter,
+          getBaseTier(ctx),
+        );
+        if (retryResults.length > 0) {
+          results = retryResults;
+        }
       }
     }
   }
@@ -139,5 +184,14 @@ export async function handleSearchTools(
       autoActivate && results.some((r) => !r.isActive && postActivationActiveNames.has(r.name)),
   };
 
-  return asTextResponse(JSON.stringify(response, null, 2));
+  let responseText = JSON.stringify(response, null, 2);
+
+  const suggestions = engine
+    .getSearchQualityTracker()
+    .getEnhancementSuggestions(query, results.length, results[0]?.score ?? 0);
+  if (suggestions && suggestions.length > 0) {
+    responseText += `\n\n---\n**Search Enhancement Suggestions:**\n${suggestions.map((s) => `- ${s}`).join('\n')}`;
+  }
+
+  return asTextResponse(responseText);
 }

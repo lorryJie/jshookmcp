@@ -12,21 +12,21 @@
 ## 基础插件示例
 
 所有插件的初始化基于声明式的 fluent builder 模式链式调用。
-参考代码库 `jshook_plugin_template` 下的 `src/manifest.ts`：
+参考代码库 `jshook_plugin_template` 下的 `manifest.ts`：
 
 ```ts
 import { createExtension, jsonResponse } from '@jshookmcp/extension-sdk/plugin';
 
 export default createExtension('io.github.example.my-first-plugin', '1.0.0')
   .compatibleCore('^0.1.0')
-  .allowTool(['browser_click', 'network_get_requests'])
+  .allowTool(['page_click', 'network_get_requests'])
   .metric(['my_plugin.loaded'])
   .tool(
     'my_custom_tool',
     'Execute DOM mutation and fetch traces.',
-    { message: { type: 'string', description: 'Mutation payload selector' } },
+    { selector: { type: 'string', description: 'Mutation payload selector' } },
     async (args, ctx) => {
-      const clickRes = await ctx.invokeTool('browser_click', { text: args.message });
+      const clickRes = await ctx.invokeTool('page_click', { selector: String(args.selector) });
       return jsonResponse({ success: true, result: clickRes });
     }
   )
@@ -36,6 +36,15 @@ export default createExtension('io.github.example.my-first-plugin', '1.0.0')
   .onActivate(async (ctx) => {
     ctx.registerMetric('my_plugin.loaded');
   });
+```
+
+插件目录中的 `meta.yaml` 负责对外展示元数据，`manifest.ts` 只保留运行时声明：
+
+```yaml
+name: My First Plugin
+description: Execute DOM mutation and fetch traces.
+author: your-team
+source_repo: https://github.com/your-org/my-first-plugin
 ```
 
 **说明：**
@@ -51,6 +60,7 @@ export default createExtension('io.github.example.my-first-plugin', '1.0.0')
 
 - 使用基础模板库: `https://github.com/vmoranv/jshook_plugin_template`
 - 初始化主进程环境变量: `export MCP_PLUGIN_ROOTS=<path-to-cloned-jshook_plugin_template>`
+- PowerShell: `$env:MCP_PLUGIN_ROOTS = "<path-to-cloned-jshook_plugin_template>"`
 
 ### 2. 构建与校验
 
@@ -67,7 +77,7 @@ pnpm run check
 部署前，请替换模板工程中以下全局标识：
 
 - 插件 ID (`PLUGIN_ID`)：推荐使用 x.y.z 反向域名格式，如 `io.github.example.my-plugin`。
-- 元数据 (`manifest.name` / `manifest.pluginVersion` / `manifest.description`) 等向外展示的信息。
+- `meta.yaml` 中的 `name` / `description` / `author` / `source_repo`。
 
 ### 4. 权限白名单配置
 
@@ -114,16 +124,25 @@ pnpm run check
 
 `@jshookmcp/extension-sdk` 内置了以下常用辅助函数：
 
-- **`loadPluginEnv(import.meta.url)`**:
-  读取当前插件目录下的 `.env` 配置文件。
-- **`getPluginBooleanConfig(ctx, pluginId, key, fallback)`**:
-  读取布尔类型的配置项，优先读取环境变量。
+- **`jsonResponse(payload)` / `errorResponse(tool, error, extra?)`**:
+  生成标准 MCP 工具响应。
+- **`checkExternalCommand(...)` / `runProcess(...)`**:
+  用于桥接本地 CLI 并做基础超时与输出封装。
 
 ## 验证与发布
 
 插件加载后的建议验证步骤：
 
-1. 客户端发送 `extensions_reload`
-2. 运行 `extensions_list` 确认您的插件已挂载激活
-3. 调用 `search_tools` 检查所分配的 API 端点是否正常加载
+1. 客户端发送 `reload_extensions`
+2. 运行 `list_extensions` 确认您的插件和工具已加载
+3. 直接调用扩展工具，或使用 `search_tools` / `describe_tool` 做探测
 4. 如果代码有改动，必须重新执行 `pnpm run build` 以刷新 JS 包依赖
+
+`reload_extensions` 现在会把当前 profile 可见的扩展工具直接注册到 MCP 工具列表中，不需要再额外执行一次 `activate_tools`。只有当工具不在当前 profile、或者客户端没有刷新工具列表时，才需要借助 `activate_tools` / `call_tool`。
+
+`list_extensions` / `reload_extensions` 的 `tools` 数组会直接返回每个扩展工具的：
+
+- `profiles`：声明的 profile 范围
+- `visibleInCurrentProfile`：当前会话 profile 下是否可见
+- `active`：当前是否已注册到工具列表
+- `activationSource`：激活来源（`reload` / `activate_tools` / `activate_domain`）

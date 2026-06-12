@@ -8,11 +8,18 @@
  * all methods return actionable errors.
  */
 
-import { execSync, execFileSync } from 'node:child_process';
+import { execSync, execFileSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { ADB_VERSION_CHECK_TIMEOUT_MS } from '@src/constants';
 import { createWriteStream } from 'node:fs';
 import type { Duplex, Readable } from 'node:stream';
 import type { ADBDevice, ADBForwardEntry, APKInfo, ADBShellResult, CDPTarget } from './types.js';
+import { PrerequisiteError } from '@errors/PrerequisiteError';
+import { ToolError } from '@errors/ToolError';
+
+const execFileAsync = promisify(execFile);
+const ADB_AVAILABILITY_TTL_MS = 5 * 60_000;
+let adbAvailabilityCache: { value: boolean; expiresAt: number } | null = null;
 
 // Lazy-load @devicefarmer/adbkit only when available (optional dependency).
 type AdbkitModule = typeof import('@devicefarmer/adbkit');
@@ -28,24 +35,54 @@ async function loadAdbkit(): Promise<AdbkitModule | null> {
 }
 
 function adbUnavailableError(): never {
-  throw new Error(
+  throw new PrerequisiteError(
     'ADB server binary not found in PATH. Install Android Platform Tools: ' +
       'https://developer.android.com/studio/command-line/adb',
   );
 }
 
 function sdkUnavailableError(): never {
-  throw new Error('@devicefarmer/adbkit is not installed. Run: npm install @devicefarmer/adbkit');
+  throw new PrerequisiteError(
+    '@devicefarmer/adbkit is not installed. Run: npm install @devicefarmer/adbkit',
+  );
 }
 
-/** Check if ADB binary is accessible. */
-function checkADBBinary(): boolean {
+/**
+ * Synchronously check whether ADB binary is reachable. Kept for callers that
+ * need a quick best-effort signal before any async work; prefer
+ * `ensureAdbAvailable()` from handler hot paths.
+ */
+export function checkADBBinary(): boolean {
   try {
     execSync('adb version', { stdio: 'pipe', timeout: ADB_VERSION_CHECK_TIMEOUT_MS });
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * Async availability check with TTL cache. Use this in handler hot paths to avoid
+ * blocking the event loop with execSync on every call.
+ */
+async function ensureAdbAvailable(): Promise<boolean> {
+  const now = Date.now();
+  if (adbAvailabilityCache && adbAvailabilityCache.expiresAt > now) {
+    return adbAvailabilityCache.value;
+  }
+  try {
+    await execFileAsync('adb', ['version'], { timeout: ADB_VERSION_CHECK_TIMEOUT_MS });
+    adbAvailabilityCache = { value: true, expiresAt: now + ADB_AVAILABILITY_TTL_MS };
+    return true;
+  } catch {
+    adbAvailabilityCache = { value: false, expiresAt: now + ADB_AVAILABILITY_TTL_MS };
+    return false;
+  }
+}
+
+/** Reset the availability cache. Test-only — not part of the public API. */
+export function resetAdbAvailabilityCache(): void {
+  adbAvailabilityCache = null;
 }
 
 /** Get or create an adbkit Client instance. */
@@ -75,11 +112,11 @@ async function readStreamAll(stream: Duplex | Readable): Promise<Buffer> {
 
 export class ADBConnector {
   /**
-   * Verify ADB server binary is in PATH.
+   * Verify ADB server binary is in PATH (uses async TTL-cached probe).
    * @returns true if ADB is available, false otherwise
    */
-  checkADBAvailable(): boolean {
-    return checkADBBinary();
+  async checkADBAvailable(): Promise<boolean> {
+    return ensureAdbAvailable();
   }
 
   /**
@@ -87,7 +124,7 @@ export class ADBConnector {
    * @returns array of ADBDevice with serial, model, product, state, sdkVersion, abi
    */
   async listDevices(): Promise<ADBDevice[]> {
-    if (!checkADBBinary()) adbUnavailableError();
+    if (!(await ensureAdbAvailable())) adbUnavailableError();
 
     const client = await getClient();
     const devices = await client.listDevices();
@@ -135,7 +172,7 @@ export class ADBConnector {
    * @returns ADBShellResult with stdout, stderr, exitCode
    */
   async shellCommand(serial: string, command: string): Promise<ADBShellResult> {
-    if (!checkADBBinary()) adbUnavailableError();
+    if (!(await ensureAdbAvailable())) adbUnavailableError();
 
     const client = await getClient();
     const deviceClient = client.getDevice(serial);
@@ -159,7 +196,7 @@ export class ADBConnector {
    * @returns forwarding spec string
    */
   async forwardPort(serial: string, localPort: number, remotePort: number): Promise<string> {
-    if (!checkADBBinary()) adbUnavailableError();
+    if (!(await ensureAdbAvailable())) adbUnavailableError();
 
     const client = await getClient();
     const deviceClient = client.getDevice(serial);
@@ -173,7 +210,7 @@ export class ADBConnector {
    * @returns array of forward entries
    */
   async listForwards(serial: string): Promise<ADBForwardEntry[]> {
-    if (!checkADBBinary()) adbUnavailableError();
+    if (!(await ensureAdbAvailable())) adbUnavailableError();
 
     const client = await getClient();
     const deviceClient = client.getDevice(serial);
@@ -192,11 +229,11 @@ export class ADBConnector {
    * @param localPort local port to remove
    */
   async removeForward(serial: string, localPort: number): Promise<void> {
-    if (!checkADBBinary()) adbUnavailableError();
+    if (!(await ensureAdbAvailable())) adbUnavailableError();
 
     // Validate serial to prevent command injection
     if (!/^[a-zA-Z0-9._:@-]+$/.test(serial)) {
-      throw new Error(`Invalid device serial format: ${serial}`);
+      throw new ToolError('VALIDATION', `Invalid device serial format: ${serial}`);
     }
 
     // Use execFileSync with argument array to prevent shell injection
@@ -218,7 +255,7 @@ export class ADBConnector {
    * @returns path to the saved APK file
    */
   async pullApk(serial: string, packageName: string, outputPath: string): Promise<string> {
-    if (!checkADBBinary()) adbUnavailableError();
+    if (!(await ensureAdbAvailable())) adbUnavailableError();
 
     // First get the APK path on device
     const { stdout } = await this.shellCommand(serial, `pm path ${packageName}`);
@@ -226,7 +263,7 @@ export class ADBConnector {
     // Parse "package:/data/app/~~xxx/base.apk" format
     const match = stdout.match(/package:(.+)/);
     if (!match) {
-      throw new Error(`Package "${packageName}" not found on device ${serial}`);
+      throw new ToolError('NOT_FOUND', `Package "${packageName}" not found on device ${serial}`);
     }
     const apkPath = match[1] as string;
 
@@ -252,7 +289,7 @@ export class ADBConnector {
    * @returns APKInfo with manifest details
    */
   async parseApkInfo(serial: string, packageName: string): Promise<APKInfo> {
-    if (!checkADBBinary()) adbUnavailableError();
+    if (!(await ensureAdbAvailable())) adbUnavailableError();
 
     const { stdout } = await this.shellCommand(serial, `dumpsys package ${packageName}`);
 
@@ -266,7 +303,7 @@ export class ADBConnector {
    * @returns array of debuggable WebView targets
    */
   async listWebViewTargets(serial: string, hostPort = 9222): Promise<CDPTarget[]> {
-    if (!checkADBBinary()) adbUnavailableError();
+    if (!(await ensureAdbAvailable())) adbUnavailableError();
 
     // Forward port to the WebView devtools socket
     await this.forwardPort(serial, hostPort, 9222);
@@ -280,10 +317,11 @@ export class ADBConnector {
     } catch (err) {
       // Clean up forward on failure
       await this.removeForward(serial, hostPort).catch(() => {});
-      throw new Error(
+      throw new ToolError(
+        'CONNECTION',
         `Failed to fetch WebView targets: ${err instanceof Error ? err.message : String(err)}. Ensure the app has ` +
           `android:debuggable="true".`,
-        { cause: err },
+        { cause: err instanceof Error ? err : undefined },
       );
     }
   }

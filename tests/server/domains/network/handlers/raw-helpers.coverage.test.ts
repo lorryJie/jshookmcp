@@ -16,7 +16,7 @@ const ssrfState = vi.hoisted(() => ({
   http2Connect: vi.fn(),
 }));
 
-vi.mock('@server/domains/network/ssrf-policy', () => ({
+vi.mock('@utils/network/ssrf-policy', () => ({
   createNetworkAuthorizationPolicy: (...args: unknown[]) =>
     ssrfState.createNetworkAuthorizationPolicy(...args),
   hasAuthorizedTargets: (...args: unknown[]) => ssrfState.hasAuthorizedTargets(...args),
@@ -194,7 +194,9 @@ describe('raw-helpers', () => {
         maxMs: 30,
         avgMs: 20,
         p50Ms: 20,
+        p90Ms: 30,
         p95Ms: 30,
+        p99Ms: 30,
       });
       expect(computeRttStats([])).toBeNull();
       expect(normalizeTargetHost('[::1]')).toBe('::1');

@@ -236,4 +236,90 @@ export const coreTools: Tool[] = [
       })
       .required('code'),
   ),
+  tool('analysis_ast_match', (t) =>
+    t
+      .desc('Match AST nodes by type and optional property filter.')
+      .string('code', 'JavaScript source code to search')
+      .string(
+        'nodeType',
+        'AST node type to match (e.g. CallExpression, MemberExpression, FunctionDeclaration)',
+      )
+      .string('filter', 'Optional property filter as JSON path=value, e.g. {"callee.name":"eval"}')
+      .number('maxResults', 'Maximum matches to return', { default: 50, minimum: 1, maximum: 500 })
+      .required('code', 'nodeType'),
+  ),
+  tool('analysis_deflat_control_flow', (t) =>
+    t
+      .desc('Flatten switch-dispatch control flow back to straight-line code.')
+      .string('code', 'Obfuscated JavaScript source with CFF pattern')
+      .boolean('removeDispatcher', 'Remove the dispatcher variable after flattening', {
+        default: true,
+      })
+      .required('code'),
+  ),
+  tool('analysis_decode_string_array', (t) =>
+    t
+      .desc('Decode literal string-array access back to strings.')
+      .string('code', 'JavaScript source')
+      .boolean('removeRotation', 'Apply simple rotation cleanup first', {
+        default: true,
+      })
+      .number('maxReplacements', 'Maximum replacements', {
+        default: 200,
+        minimum: 1,
+        maximum: 10000,
+      })
+      .required('code'),
+  ),
+  tool('js_symbolic_execute', (t) =>
+    t
+      .desc(
+        'Symbolic execution of JavaScript: explore all feasible execution paths, collect path constraints, and solve them. ' +
+          'Best for control-flow-flattened code with complex branching.',
+      )
+      .string('code', 'JavaScript source to symbolically execute')
+      .number('maxPaths', 'Maximum paths to explore', { default: 100, minimum: 1, maximum: 1000 })
+      .number('maxDepth', 'Maximum traversal depth', { default: 50, minimum: 1, maximum: 200 })
+      .number('timeout', 'Execution timeout in ms', {
+        default: 30000,
+        minimum: 5000,
+        maximum: 120000,
+      })
+      .boolean('enableConstraintSolving', 'Run constraint solver on collected paths', {
+        default: false,
+      })
+      .required('code'),
+  ),
+  tool('js_symbolic_execute_jsvmp', (t) =>
+    t
+      .desc(
+        'Symbolic execution of JSVMP bytecode: step through instructions symbolically to infer ' +
+          'original logic, constraints, and confidence score. Use after js_analyze_vm to get instructions.',
+      )
+      .prop('instructions', {
+        type: 'array',
+        description:
+          'JSVMP instructions from js_analyze_vm (array of {opcode, operands, location})',
+        items: {
+          type: 'object',
+          properties: {
+            opcode: { type: 'string', description: 'Instruction opcode' },
+            operands: { type: 'array', description: 'Operands' },
+            location: { type: 'number', description: 'Bytecode offset' },
+          },
+        },
+      })
+      .enum('vmType', ['custom', 'standard'], 'VM type hint', { default: 'custom' })
+      .number('maxSteps', 'Maximum steps to execute', {
+        default: 1000,
+        minimum: 100,
+        maximum: 50000,
+      })
+      .number('timeout', 'Execution timeout in ms', {
+        default: 30000,
+        minimum: 5000,
+        maximum: 120000,
+      })
+      .required('instructions'),
+  ),
 ];

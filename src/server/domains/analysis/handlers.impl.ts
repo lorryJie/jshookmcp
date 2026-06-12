@@ -7,17 +7,18 @@ import {
   argString,
   argStringRequired,
 } from '@server/domains/shared/parse-args';
-import { asJsonResponse, asTextResponse, serializeError } from '@server/domains/shared/response';
+import { handleSafe } from '@server/domains/shared/ResponseBuilder';
+import { asJsonResponse, asTextResponse } from '@server/domains/shared/response';
 import type {
   AdvancedDeobfuscator,
   CodeAnalyzer,
-  CodeCollector,
   CryptoDetector,
   Deobfuscator,
   HookManager,
   ObfuscationDetector,
   ScriptManager,
 } from '@server/domains/shared/modules';
+import type { CodeCollector } from '@server/domains/shared/modules/collector';
 import type { ToolArgs, ToolResponse } from '@server/types';
 import {
   ANALYSIS_MAX_SUMMARY_FILES,
@@ -35,7 +36,18 @@ import { buildVmAnalysisResponse } from '@server/domains/analysis/handlers/vm-an
 import { runWebpackEnumerate } from '@server/domains/analysis/handlers.web-tools';
 import type { DeobfuscateMappingRule } from '@internal-types/deobfuscator';
 import { JSVMPDeobfuscator } from '@modules/deobfuscator/JSVMPDeobfuscator';
+import { SymbolicExecutor } from '@modules/symbolic/SymbolicExecutor';
+import { JSVMPSymbolicExecutor } from '@modules/symbolic/JSVMPSymbolicExecutor';
+import { derotateStringArray } from '@modules/deobfuscator/AdvancedDeobfuscator.ast';
 import { runWebcrack } from '@modules/deobfuscator/webcrack';
+import * as parser from '@babel/parser';
+import _traverse from '@babel/traverse';
+import _generate from '@babel/generator';
+import * as t from '@babel/types';
+import type { NodePath } from '@babel/traverse';
+
+const traverse = (_traverse as unknown as { default: typeof _traverse }).default ?? _traverse;
+const generate = (_generate as unknown as { default: typeof _generate }).default ?? _generate;
 
 const SMART_MODES = new Set(['summary', 'priority', 'incremental', 'full'] as const);
 const FOCUS_MODES = new Set(['structure', 'business', 'security', 'all'] as const);
@@ -48,6 +60,7 @@ const HOOK_TYPES = new Set([
   'cookie',
 ] as const);
 const HOOK_ACTIONS = new Set(['log', 'block', 'modify'] as const);
+const SIMPLE_CONTROL_FLOW_HELPERS = new Set(['call', 'apply'] as const);
 
 interface CoreAnalysisHandlerDeps {
   collector: CodeCollector;
@@ -532,11 +545,10 @@ export class CoreAnalysisHandlers {
   }
 
   async handleClearCollectedData(): Promise<ToolResponse> {
-    try {
+    return handleSafe(async () => {
       await this.collector.clearAllData();
       this.scriptManager.clear();
-      return asJsonResponse({
-        success: true,
+      return {
         message: 'All collected data cleared.',
         cleared: {
           fileCache: true,
@@ -544,18 +556,14 @@ export class CoreAnalysisHandlers {
           collectedUrls: true,
           scriptManager: true,
         },
-      });
-    } catch (error) {
-      logger.error('Failed to clear collected data:', error);
-      return asJsonResponse(serializeError(error));
-    }
+      };
+    });
   }
 
   async handleGetCollectionStats(): Promise<ToolResponse> {
-    try {
+    return handleSafe(async () => {
       const stats = await this.collector.getAllStats();
-      return asJsonResponse({
-        success: true,
+      return {
         stats,
         summary: {
           totalCachedFiles: stats.cache.memoryEntries + stats.cache.diskEntries,
@@ -571,11 +579,8 @@ export class CoreAnalysisHandlers {
               : '0%',
           collectedUrls: stats.collector.collectedUrls,
         },
-      });
-    } catch (error) {
-      logger.error('Failed to get collection stats:', error);
-      return asJsonResponse(serializeError(error));
-    }
+      };
+    });
   }
 
   async handleJsDeobfuscateJsvmp(args: ToolArgs): Promise<ToolResponse> {
@@ -765,5 +770,452 @@ export class CoreAnalysisHandlers {
         maxIterations,
       }),
     );
+  }
+
+  async handleAnalysisAstMatch(args: ToolArgs): Promise<ToolResponse> {
+    const code = argString(args, 'code');
+    if (!code) {
+      return asJsonResponse({ success: false, error: 'code is required' });
+    }
+    const nodeType = argString(args, 'nodeType');
+    if (!nodeType) {
+      return asJsonResponse({ success: false, error: 'nodeType is required' });
+    }
+
+    const maxResults = argNumber(args, 'maxResults', 50);
+    const filterRaw = argString(args, 'filter');
+    let filter: Record<string, string> | undefined;
+    if (filterRaw) {
+      try {
+        filter = JSON.parse(filterRaw) as Record<string, string>;
+      } catch {
+        return asJsonResponse({ success: false, error: 'filter must be valid JSON' });
+      }
+    }
+
+    let ast: ReturnType<typeof parser.parse>;
+    try {
+      ast = parser.parse(code, { sourceType: 'unambiguous', plugins: ['jsx', 'typescript'] });
+    } catch (err) {
+      return asJsonResponse({
+        success: false,
+        error: `Parse error: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+
+    const matches: Array<{
+      type: string;
+      start: number;
+      end: number;
+      code: string;
+      properties: Record<string, unknown>;
+    }> = [];
+
+    const targetNodeType = nodeType;
+
+    type BabelNode = {
+      type: string;
+      start?: number | null;
+      end?: number | null;
+      [key: string]: unknown;
+    };
+
+    function matchesFilter(node: BabelNode): boolean {
+      if (!filter) return true;
+      for (const [path, value] of Object.entries(filter)) {
+        const parts = path.split('.');
+        let current: unknown = node;
+        for (const part of parts) {
+          if (current === null || current === undefined || typeof current !== 'object')
+            return false;
+          current = (current as Record<string, unknown>)[part];
+        }
+        if (String(current) !== String(value)) return false;
+      }
+      return true;
+    }
+
+    function extractProperties(node: BabelNode): Record<string, unknown> {
+      const props: Record<string, unknown> = {};
+      for (const key of Object.keys(node)) {
+        if (key === 'type' || key === 'start' || key === 'end' || key === 'loc' || key === 'range')
+          continue;
+        const val = node[key];
+        if (
+          val === null ||
+          val === undefined ||
+          typeof val === 'string' ||
+          typeof val === 'number' ||
+          typeof val === 'boolean'
+        ) {
+          props[key] = val;
+        } else if (Array.isArray(val) && val.length <= 5) {
+          props[key] = val.map((v) =>
+            typeof v === 'object' && v !== null && 'type' in (v as object)
+              ? { type: (v as BabelNode).type }
+              : v,
+          );
+        } else if (typeof val === 'object' && val !== null && 'type' in (val as object)) {
+          props[key] = { type: (val as BabelNode).type };
+        }
+      }
+      return props;
+    }
+
+    traverse(ast, {
+      enter(path: NodePath) {
+        const node = path.node as BabelNode;
+        if (node.type === targetNodeType && matchesFilter(node)) {
+          matches.push({
+            type: node.type,
+            start: node.start ?? -1,
+            end: node.end ?? -1,
+            code: code.slice(node.start ?? 0, node.end ?? 0),
+            properties: extractProperties(node),
+          });
+          if (matches.length >= maxResults) {
+            path.stop();
+          }
+        }
+      },
+    });
+
+    return asJsonResponse({ success: true, matches, total: matches.length, nodeType });
+  }
+
+  async handleAnalysisDeflatControlFlow(args: ToolArgs): Promise<ToolResponse> {
+    const code = argString(args, 'code');
+    if (!code) {
+      return asJsonResponse({ success: false, error: 'code is required' });
+    }
+
+    let ast: ReturnType<typeof parser.parse>;
+    try {
+      ast = parser.parse(code, { sourceType: 'unambiguous' });
+    } catch (err) {
+      return asJsonResponse({
+        success: false,
+        error: `Parse error: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+
+    const removeDispatcher = argBool(args, 'removeDispatcher', true);
+    const prepared = this.preprocessDeflatCode(code);
+    if (prepared.code !== code) {
+      try {
+        ast = parser.parse(prepared.code, { sourceType: 'unambiguous' });
+      } catch (err) {
+        return asJsonResponse({
+          success: false,
+          error: `Parse error: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    }
+    let flattenedCount = 0;
+    const dispatcherBindings = new Set<t.Identifier>();
+
+    const resolveDispatcherArray = this.resolveDispatcherArray.bind(this);
+
+    traverse(ast, {
+      WhileStatement: (path: NodePath<t.WhileStatement>) => {
+        const test = path.node.test;
+        if (test.type !== 'BooleanLiteral' || test.value !== true) return;
+
+        const body = path.node.body;
+        if (body.type !== 'BlockStatement') return;
+
+        const switchStmt = body.body.find(
+          (s): s is t.SwitchStatement => s.type === 'SwitchStatement',
+        );
+        if (!switchStmt) return;
+
+        const discriminant = switchStmt.discriminant;
+        if (discriminant.type !== 'MemberExpression' || !discriminant.computed) return;
+        const objExpr = discriminant.object;
+        if (objExpr.type !== 'Identifier') return;
+
+        const arrayName = objExpr.name;
+
+        // Accept index as Identifier or UpdateExpression(Identifier++)
+        let indexName: string | undefined;
+        const propExpr = discriminant.property;
+        if (propExpr.type === 'Identifier') {
+          indexName = propExpr.name;
+        } else if (
+          propExpr.type === 'UpdateExpression' &&
+          propExpr.argument.type === 'Identifier'
+        ) {
+          indexName = propExpr.argument.name;
+        }
+        if (!indexName) return;
+
+        const cases = switchStmt.cases;
+        if (cases.length === 0) return;
+
+        const caseMap = new Map<string, t.Statement[]>();
+        for (const c of cases) {
+          if (!c.test || c.test.type !== 'StringLiteral') continue;
+          caseMap.set(c.test.value, c.consequent as t.Statement[]);
+        }
+
+        const arrayBinding = path.scope.getBinding(arrayName);
+        const indexBinding = path.scope.getBinding(indexName);
+        if (!arrayBinding || !indexBinding) return;
+
+        const elements = resolveDispatcherArray(path, arrayName);
+        if (!elements) return;
+
+        const order: string[] = [];
+        if (elements.type === 'ArrayExpression') {
+          for (const el of elements.elements) {
+            if (el && el.type === 'StringLiteral') {
+              order.push(el.value);
+            }
+          }
+        } else if (
+          elements.type === 'CallExpression' &&
+          elements.callee.type === 'MemberExpression' &&
+          elements.callee.property.type === 'Identifier' &&
+          elements.callee.property.name === 'split' &&
+          elements.arguments[0]?.type === 'StringLiteral'
+        ) {
+          const separator = elements.arguments[0].value;
+          const strNode = elements.callee.object;
+          if (strNode.type === 'StringLiteral') {
+            order.push(...strNode.value.split(separator));
+          }
+        }
+
+        if (order.length === 0) return;
+
+        const reordered: t.Statement[] = [];
+        for (const key of order) {
+          const stmts = caseMap.get(key);
+          if (stmts) {
+            for (const s of stmts) {
+              if (s.type === 'BreakStatement') continue;
+              if (s.type === 'ContinueStatement') continue;
+              reordered.push(s);
+            }
+          }
+        }
+
+        path.replaceWith(t.blockStatement(reordered));
+        dispatcherBindings.add(arrayBinding.identifier);
+        dispatcherBindings.add(indexBinding.identifier);
+        flattenedCount++;
+      },
+    });
+
+    if (removeDispatcher && dispatcherBindings.size > 0) {
+      traverse(ast, {
+        VariableDeclarator(path) {
+          if (path.node.id.type === 'Identifier' && dispatcherBindings.has(path.node.id)) {
+            const parent = path.parent;
+            if (parent.type === 'VariableDeclaration' && parent.declarations.length === 1) {
+              path.parentPath.remove();
+            } else {
+              path.remove();
+            }
+          }
+        },
+      });
+    }
+
+    const output = generate(ast, { retainLines: true }).code;
+
+    return asJsonResponse({
+      success: true,
+      code: output,
+      flattenedCount,
+      dispatchersRemoved: removeDispatcher ? dispatcherBindings.size : 0,
+      helperTransforms: prepared.transforms,
+    });
+  }
+
+  async handleAnalysisDecodeStringArray(args: ToolArgs): Promise<ToolResponse> {
+    const code = argString(args, 'code');
+    if (!code) {
+      return asJsonResponse({ success: false, error: 'code is required' });
+    }
+
+    const maxReplacements = argNumber(args, 'maxReplacements', 200);
+    const removeRotation = argBool(args, 'removeRotation', true);
+    const preparedCode = removeRotation ? derotateStringArray(code) : code;
+
+    const stringArrays = new Map<string, string[]>();
+    let ast: ReturnType<typeof parser.parse>;
+    try {
+      ast = parser.parse(preparedCode, {
+        sourceType: 'unambiguous',
+        plugins: ['jsx', 'typescript'],
+      });
+    } catch (err) {
+      return asJsonResponse({
+        success: false,
+        error: `Parse error: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+
+    traverse(ast, {
+      VariableDeclarator(path: NodePath<t.VariableDeclarator>) {
+        if (!t.isIdentifier(path.node.id) || !t.isArrayExpression(path.node.init)) return;
+        const items: string[] = [];
+        for (const element of path.node.init.elements) {
+          if (!t.isStringLiteral(element)) return;
+          items.push(element.value);
+        }
+        stringArrays.set(path.node.id.name, items);
+      },
+    });
+
+    const replacements: Array<{
+      arrayName: string;
+      index: number;
+      value: string;
+      original: string;
+    }> = [];
+    let replacedCount = 0;
+
+    traverse(ast, {
+      CallExpression(path: NodePath<t.CallExpression>) {
+        if (replacedCount >= maxReplacements) {
+          path.stop();
+          return;
+        }
+        if (!t.isIdentifier(path.node.callee)) return;
+        const arrayName = path.node.callee.name;
+        const items = stringArrays.get(arrayName);
+        if (!items || path.node.arguments.length !== 1) return;
+        const firstArg = path.node.arguments[0];
+        if (!t.isNumericLiteral(firstArg) && !t.isStringLiteral(firstArg)) {
+          return;
+        }
+
+        const index = t.isNumericLiteral(firstArg)
+          ? firstArg.value
+          : firstArg.value.startsWith('0x')
+            ? Number.parseInt(firstArg.value, 16)
+            : Number(firstArg.value);
+        if (!Number.isInteger(index) || index < 0 || index >= items.length) return;
+
+        const value = items[index];
+        if (typeof value !== 'string') return;
+        replacements.push({
+          arrayName,
+          index,
+          value,
+          original: generate(path.node, { compact: true }).code,
+        });
+        path.replaceWith(t.stringLiteral(value));
+        replacedCount += 1;
+      },
+    });
+
+    return asJsonResponse({
+      success: true,
+      code: generate(ast, { retainLines: true }).code,
+      replacedCount,
+      arraysFound: stringArrays.size,
+      rotationRemoved: removeRotation && preparedCode !== code,
+      replacements,
+    });
+  }
+
+  private preprocessDeflatCode(code: string): { code: string; transforms: string[] } {
+    let output = code;
+    const transforms: string[] = [];
+
+    const simplifiedMemberCalls = output.replace(
+      /(\b[a-zA-Z_$][\w$]*)\[['"]([a-zA-Z_$][\w$]*)['"]\]\(([^)]*)\)/g,
+      (_full, target: string, prop: string, args: string) => {
+        if (!SIMPLE_CONTROL_FLOW_HELPERS.has(prop as 'call' | 'apply')) {
+          return _full;
+        }
+        transforms.push('helper-member-call');
+        return `${target}.${prop}(${args})`;
+      },
+    );
+    output = simplifiedMemberCalls;
+
+    return { code: output, transforms };
+  }
+
+  private resolveDispatcherArray(
+    path: NodePath<t.WhileStatement>,
+    arrayName: string,
+  ): t.Expression | null {
+    const binding = path.scope.getBinding(arrayName);
+    if (!binding?.path.isVariableDeclarator()) return null;
+    const directInit = binding.path.node.init;
+    if (directInit) return directInit;
+
+    const parentDeclaration = binding.path.parentPath;
+    if (!parentDeclaration.isVariableDeclaration()) return null;
+    const siblings = parentDeclaration.getAllNextSiblings();
+    for (const candidate of siblings) {
+      if (!candidate.isExpressionStatement()) continue;
+      const expr = candidate.node.expression;
+      if (
+        !t.isAssignmentExpression(expr) ||
+        expr.operator !== '=' ||
+        !t.isIdentifier(expr.left, { name: arrayName })
+      ) {
+        continue;
+      }
+      return expr.right;
+    }
+
+    return null;
+  }
+
+  // ── Symbolic Execution ──
+
+  async handleJsSymbolicExecute(args: ToolArgs): Promise<ToolResponse> {
+    const code = argStringRequired(args, 'code');
+    if (!code) return asJsonResponse({ success: false, error: 'code is required' });
+
+    const maxPaths = argNumber(args, 'maxPaths');
+    const maxDepth = argNumber(args, 'maxDepth');
+    const timeout = argNumber(args, 'timeout');
+    const enableConstraintSolving = argBool(args, 'enableConstraintSolving', false);
+
+    return handleSafe(async () => {
+      const executor = new SymbolicExecutor();
+      const result = await executor.execute({
+        code,
+        ...(maxPaths !== undefined ? { maxPaths } : {}),
+        ...(maxDepth !== undefined ? { maxDepth } : {}),
+        ...(timeout !== undefined ? { timeout } : {}),
+        enableConstraintSolving,
+      });
+      return result as unknown as Record<string, unknown>;
+    });
+  }
+
+  async handleJsSymbolicExecuteJsvmp(args: ToolArgs): Promise<ToolResponse> {
+    const instructions = argObject(args, 'instructions');
+    if (!instructions || !Array.isArray(instructions)) {
+      return asJsonResponse({
+        success: false,
+        error: 'instructions array is required (from js_analyze_vm output)',
+      });
+    }
+
+    const vmType = argString(args, 'vmType') as import('@internal-types/vm').VMType | undefined;
+    const maxSteps = argNumber(args, 'maxSteps');
+    const timeout = argNumber(args, 'timeout');
+
+    return handleSafe(async () => {
+      const executor = new JSVMPSymbolicExecutor();
+      const result = await executor.executeJSVMP({
+        instructions:
+          instructions as import('@modules/symbolic/JSVMPSymbolicExecutor').JSVMPInstruction[],
+        ...(vmType ? { vmType } : {}),
+        ...(maxSteps !== undefined ? { maxSteps } : {}),
+        ...(timeout !== undefined ? { timeout } : {}),
+      });
+      return result as unknown as Record<string, unknown>;
+    });
   }
 }

@@ -14,13 +14,15 @@ const registrations = defineMethodRegistrations<H, (typeof sourcemapTools)[numbe
   entries: [
     { tool: 'sourcemap_discover', method: 'handleSourcemapDiscover' },
     { tool: 'sourcemap_fetch_and_parse', method: 'handleSourcemapFetchAndParse' },
+    { tool: 'sourcemap_coverage', method: 'handleSourcemapCoverage' },
+    { tool: 'sourcemap_lookup', method: 'handleSourcemapLookup' },
     { tool: 'sourcemap_reconstruct_tree', method: 'handleSourcemapReconstructTree' },
     { tool: 'sourcemap_parse_v4', method: 'handleSourcemapParseV4' },
   ],
 });
 
 async function ensure(ctx: MCPServerContext): Promise<H> {
-  const { CodeCollector } = await import('@server/domains/shared/modules');
+  const { CodeCollector } = await import('@server/domains/shared/modules/collector');
   const { SourcemapToolHandlers } = await import('@server/domains/sourcemap/index');
   if (!ctx.collector) {
     ctx.collector = new CodeCollector(ctx.config.puppeteer);

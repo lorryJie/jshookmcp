@@ -1,7 +1,11 @@
 import type { DomainManifest, MCPServerContext } from '@server/domains/shared/registry';
 import { defineMethodRegistrations, toolLookup } from '@server/domains/shared/registry';
 import { binaryInstrumentTools } from './definitions';
+import { apkPackerTools } from './apk-packer/definitions';
+import { binarySecretsTools } from './secrets/definitions';
 import type { BinaryInstrumentHandlers } from './handlers';
+import type { ApkPackerHandlers } from './apk-packer/handlers';
+import type { BinarySecretsHandlers } from './secrets/handlers';
 
 const DOMAIN = 'binary-instrument' as const;
 const DEP_KEY = 'binaryInstrumentHandlers' as const;
@@ -21,11 +25,23 @@ const registrations = defineMethodRegistrations<H, (typeof binaryInstrumentTools
     { tool: 'frida_run_script', method: 'handleFridaRunScript' },
     { tool: 'frida_detach', method: 'handleFridaDetach' },
     { tool: 'frida_list_sessions', method: 'handleFridaListSessions' },
+    { tool: 'frida_dex_dump', method: 'handleFridaDexDump' },
+    { tool: 'android_runtime_dump_session', method: 'handleAndroidRuntimeDumpSession' },
     { tool: 'frida_generate_script', method: 'handleFridaGenerateScript' },
     { tool: 'get_available_plugins', method: 'handleGetAvailablePlugins' },
     { tool: 'ghidra_decompile', method: 'handleGhidraDecompile' },
     { tool: 'ida_decompile', method: 'handleIdaDecompile' },
     { tool: 'jadx_decompile', method: 'handleJadxDecompile' },
+    { tool: 'jadx_decompile_apk', method: 'handleJadxDecompileApk' },
+    { tool: 'jadx_search_code', method: 'handleJadxSearchCode' },
+    { tool: 'apktool_decode', method: 'handleApktoolDecode' },
+    { tool: 'apk_manifest_dump', method: 'handleApkManifestDump' },
+    { tool: 'apk_manifest_query', method: 'handleApkManifestQuery' },
+    { tool: 'apk_static_triage', method: 'handleApkStaticTriage' },
+    { tool: 'apk_dex_intake', method: 'handleApkDexIntake' },
+    { tool: 'dex_scan_file', method: 'handleDexScanFile' },
+    { tool: 'binary_strings_extract', method: 'handleBinaryStringsExtract' },
+    { tool: 'apk_native_libs_list', method: 'handleApkNativeLibsList' },
     { tool: 'unidbg_launch', method: 'handleUnidbgLaunch' },
     { tool: 'unidbg_call', method: 'handleUnidbgCall' },
     { tool: 'unidbg_trace', method: 'handleUnidbgTrace' },
@@ -34,6 +50,40 @@ const registrations = defineMethodRegistrations<H, (typeof binaryInstrumentTools
     { tool: 'frida_find_symbols', method: 'handleFridaFindSymbols' },
   ],
 });
+
+// ── Secondary sub-domain registrations ──
+
+const apkPackerLookup = toolLookup(apkPackerTools);
+const apkPackerRegistrations = defineMethodRegistrations<
+  ApkPackerHandlers,
+  (typeof apkPackerTools)[number]['name']
+>({
+  domain: DOMAIN,
+  depKey: 'apkPackerHandlers' as const,
+  lookup: apkPackerLookup,
+  entries: [
+    { tool: 'apk_packer_detect', method: 'handleApkPackerDetect' },
+    { tool: 'apk_packer_list_signatures', method: 'handleApkPackerListSignatures' },
+    { tool: 'apk_signing_block_parse', method: 'handleApkSigningBlockParse' },
+  ],
+});
+
+const binarySecretsLookup = toolLookup(binarySecretsTools);
+const binarySecretsRegistrations = defineMethodRegistrations<
+  BinarySecretsHandlers,
+  (typeof binarySecretsTools)[number]['name']
+>({
+  domain: DOMAIN,
+  depKey: 'binarySecretsHandlers' as const,
+  lookup: binarySecretsLookup,
+  entries: [{ tool: 'binary_key_extract', method: 'handleBinaryKeyExtract' }],
+});
+
+const allRegistrations = [
+  ...registrations,
+  ...apkPackerRegistrations,
+  ...binarySecretsRegistrations,
+];
 
 async function ensure(ctx: MCPServerContext): Promise<H> {
   const { BinaryInstrumentHandlers } = await import('./handlers');
@@ -45,6 +95,17 @@ async function ensure(ctx: MCPServerContext): Promise<H> {
     ctx.setDomainInstance(DEP_KEY, handlers);
   }
 
+  // Instantiate secondary sub-domain handlers and store on context
+  if (!ctx.getDomainInstance('apkPackerHandlers')) {
+    const { ApkPackerHandlers } = await import('./apk-packer/handlers');
+    ctx.setDomainInstance('apkPackerHandlers', new ApkPackerHandlers());
+  }
+
+  if (!ctx.getDomainInstance('binarySecretsHandlers')) {
+    const { BinarySecretsHandlers } = await import('./secrets/handlers');
+    ctx.setDomainInstance('binarySecretsHandlers', new BinarySecretsHandlers());
+  }
+
   return handlers;
 }
 
@@ -53,25 +114,43 @@ const manifest = {
   version: 1,
   domain: DOMAIN,
   depKey: DEP_KEY,
+  secondaryDepKeys: ['apkPackerHandlers', 'binarySecretsHandlers'] as const,
   profiles: ['full'],
   ensure,
-  registrations,
+  registrations: allRegistrations,
   workflowRule: {
     patterns: [
       /\b(frida|ghidra|ida|unidbg|jadx|binary|disassemb|decompil|dump\s?so)\b/i,
       /(binary|native|so|dll|elf|apk).*(analyze|hook|instrument|decompile)/i,
+      /(apk|android).*(manifest|apktool|native\s+libs|shared\s+library|\.so)/i,
+      /(apk|android).*(triage|static|packer|protector|launcher|splash)/i,
+      /(dex|cdex|vdex|binary|memory).*(scan|string|extract|dump)/i,
     ],
     priority: 88,
-    tools: ['frida_attach', 'ghidra_analyze', 'generate_hooks', 'unidbg_launch'],
-    hint:
-      'Binary analysis pipeline: attach Frida → decompile (Ghidra/IDA/JADX) → generate hook scripts → emulate' +
-      'with Unidbg.',
+    tools: [
+      'ghidra_analyze',
+      'jadx_decompile',
+      'jadx_decompile_apk',
+      'apktool_decode',
+      'apk_manifest_dump',
+      'apk_manifest_query',
+      'apk_static_triage',
+      'apk_dex_intake',
+      'dex_scan_file',
+      'android_runtime_dump_session',
+      'binary_strings_extract',
+      'apk_native_libs_list',
+      'generate_hooks',
+      'unidbg_launch',
+    ],
+    hint: 'Binary analysis pipeline: start with apk_dex_intake for one evidence packet, then decompile/inspect APK, manifest, DEX files, and native libs → generate hook scripts → emulate with Unidbg when needed.',
   },
   prerequisites: {
     frida_attach: [
       {
-        condition: 'plugin_frida_bridge must be installed and frida-server reachable',
-        fix: 'Install @jshookmcpextension/plugin-frida-bridge; launch frida-server on the target',
+        condition:
+          'Frida CLI must be installed; device targets may also require frida-server and elevated privileges',
+        fix: 'Install frida-tools and, for Android/device targets, launch frida-server on the target.',
       },
     ],
     frida_run_script: [
@@ -82,8 +161,8 @@ const manifest = {
     ],
     ghidra_analyze: [
       {
-        condition: 'plugin_ghidra_bridge must be installed with Ghidra headless available',
-        fix: 'Install @jshookmcpextension/plugin-ghidra-bridge and configure Ghidra path',
+        condition: 'Ghidra analyzeHeadless must be installed and reachable on PATH',
+        fix: 'Install Ghidra and ensure analyzeHeadless is on PATH.',
       },
     ],
     ida_decompile: [
@@ -94,8 +173,14 @@ const manifest = {
     ],
     jadx_decompile: [
       {
-        condition: 'plugin_jadx_bridge must be installed',
-        fix: 'Install @jshookmcpextension/plugin-jadx-bridge',
+        condition: 'jadx CLI or plugin_jadx_bridge must be available',
+        fix: 'Install JADX and ensure jadx is on PATH, or install @jshookmcpextension/plugin-jadx-bridge.',
+      },
+    ],
+    apktool_decode: [
+      {
+        condition: 'apktool CLI must be installed',
+        fix: 'Install apktool and ensure it is on PATH.',
       },
     ],
     unidbg_launch: [

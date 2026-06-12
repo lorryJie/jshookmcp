@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ElectronHandlers } from '@server/domains/platform/handlers/electron-handlers';
-import type { CodeCollector } from '@server/domains/shared/modules';
+import type { CodeCollector } from '@server/domains/shared/modules/collector';
 
 /**
  * Build a minimal ASAR buffer from file entries.
@@ -80,7 +80,7 @@ describe('asar_search', () => {
       inputPath: asarPath,
       pattern: 'isPro|isFree',
     });
-    const data = JSON.parse(result.content[0]!.text!);
+    const data = JSON.parse((result.content[0] as { type: 'text'; text: string }).text);
 
     expect(data.success).toBe(true);
     expect(data.totalMatches).toBeGreaterThan(0);
@@ -97,7 +97,7 @@ describe('asar_search', () => {
       inputPath: asarPath,
       pattern: 'nonexistent_pattern_xyz',
     });
-    const data = JSON.parse(result.content[0]!.text!);
+    const data = JSON.parse((result.content[0] as { type: 'text'; text: string }).text);
 
     expect(data.success).toBe(true);
     expect(data.matches).toHaveLength(0);
@@ -117,7 +117,7 @@ describe('asar_search', () => {
       pattern: 'isPro',
       fileGlob: '*.json',
     });
-    const data = JSON.parse(result.content[0]!.text!);
+    const data = JSON.parse((result.content[0] as { type: 'text'; text: string }).text);
 
     expect(data.success).toBe(true);
     // Should only match in config.json, not main.js
@@ -140,7 +140,7 @@ describe('asar_search', () => {
       pattern: 'val\\d+',
       maxResults: 3,
     });
-    const data = JSON.parse(result.content[0]!.text!);
+    const data = JSON.parse((result.content[0] as { type: 'text'; text: string }).text);
 
     expect(data.success).toBe(true);
     expect(data.totalMatches).toBeLessThanOrEqual(3);
@@ -151,7 +151,7 @@ describe('asar_search', () => {
       inputPath: join(tempDir, 'nonexistent.asar'),
       pattern: 'test',
     });
-    const data = JSON.parse(result.content[0]!.text!);
+    const data = JSON.parse((result.content[0] as { type: 'text'; text: string }).text);
     expect(data.success).toBe(false);
   });
 
@@ -164,7 +164,7 @@ describe('asar_search', () => {
       inputPath: asarPath,
       pattern: '(',
     });
-    const data = JSON.parse(result.content[0]!.text!);
+    const data = JSON.parse((result.content[0] as { type: 'text'; text: string }).text);
 
     expect(data.success).toBe(false);
     expect(data.error).toContain('Invalid regex pattern');
@@ -213,7 +213,7 @@ describe('asar_search', () => {
       pattern: 'paywall',
       fileGlob: '*.js',
     });
-    const data = JSON.parse(result.content[0]!.text!);
+    const data = JSON.parse((result.content[0] as { type: 'text'; text: string }).text);
     expect(data.success).toBe(true);
     expect(data.totalMatches).toBe(1);
     expect(data.matches[0].filePath).toBe('dist/main.js');
@@ -246,9 +246,57 @@ describe('asar_search', () => {
       pattern: 'flag',
       fileGlob: '*.js',
     });
-    const data = JSON.parse(result.content[0]!.text!);
+    const data = JSON.parse((result.content[0] as { type: 'text'; text: string }).text);
     expect(data.success).toBe(true);
     expect(data.totalMatches).toBe(1);
     expect(data.matches[0].filePath).toBe('app.js');
+  });
+
+  it('should search large minified files (>512KB)', async () => {
+    // Build a single-line minified JS file ~600KB
+    const prefix = '/* license */var a=1;'.repeat(25000); // ~600KB padding
+    const needle = 'change-me-local-db-password';
+    const suffix = ';var b=2;';
+    const hugeContent = prefix + needle + suffix;
+
+    const asar = buildMockAsar([{ path: 'dist/index.js', content: hugeContent }]);
+    const asarPath = join(tempDir, 'large.asar');
+    await writeFile(asarPath, asar);
+
+    const result = await handler.handleAsarSearch({
+      inputPath: asarPath,
+      pattern: 'change-me-local-db-password',
+    });
+    const data = JSON.parse((result.content[0] as { type: 'text'; text: string }).text);
+
+    expect(data.success).toBe(true);
+    expect(data.totalMatches).toBe(1);
+    expect(data.matches[0].filePath).toBe('dist/index.js');
+    // Context snippet should contain the needle
+    expect(data.matches[0].matchLines[0].text).toContain(needle);
+  });
+
+  it('should provide context snippets instead of full lines', async () => {
+    // Single-line file — old code would give line.slice(0, 200) which might miss the match
+    const singleLine = 'x'.repeat(500) + 'SECRET_VALUE' + 'y'.repeat(500);
+    const asar = buildMockAsar([{ path: 'bundle.js', content: singleLine }]);
+    const asarPath = join(tempDir, 'snippet.asar');
+    await writeFile(asarPath, asar);
+
+    const result = await handler.handleAsarSearch({
+      inputPath: asarPath,
+      pattern: 'SECRET_VALUE',
+    });
+    const data = JSON.parse((result.content[0] as { type: 'text'; text: string }).text);
+
+    expect(data.success).toBe(true);
+    expect(data.totalMatches).toBe(1);
+    const snippet = data.matches[0].matchLines[0].text as string;
+    // Snippet should contain the match and surrounding context
+    expect(snippet).toContain('SECRET_VALUE');
+    // Snippet should be much shorter than the full line
+    expect(snippet.length).toBeLessThan(singleLine.length);
+    // Snippet should have ellipsis indicators (truncated context)
+    expect(snippet).toContain('…');
   });
 });

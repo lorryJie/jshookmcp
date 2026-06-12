@@ -1,5 +1,17 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { tool } from '@server/registry/tool-builder';
+import {
+  BINARY_STRINGS_MAX_RESULTS_DEFAULT,
+  BINARY_STRINGS_MIN_LENGTH_DEFAULT,
+} from '@src/constants';
+import { getReverseEngineeringConfig } from '@utils/reverseEngineeringConfig';
+import { apkPackerTools } from './apk-packer/definitions';
+import { binarySecretsTools } from './secrets/definitions';
+
+const reverseConfig = getReverseEngineeringConfig();
+const apkConfig = reverseConfig.apk;
+const dexConfig = reverseConfig.dex;
+const fridaConfig = reverseConfig.frida;
 
 export const binaryInstrumentTools: Tool[] = [
   tool('binary_instrument_capabilities', (t) =>
@@ -66,6 +78,44 @@ export const binaryInstrumentTools: Tool[] = [
   tool('frida_list_sessions', (t) =>
     t.desc('List all active Frida attach sessions with target info.').query(),
   ),
+  tool('frida_dex_dump', (t) =>
+    t
+      .desc(
+        'Run frida-dexdump as a high-level Android DEX dump helper by package/process name or PID.',
+      )
+      .string('target', 'Package/process name for -n, for example com.example.app.')
+      .number('pid', 'Optional process id for -p. Overrides target when provided.')
+      .string('outputDir', 'Required output directory for dumped DEX files.')
+      .boolean('usb', 'Use USB device mode (-U).', { default: true })
+      .number('timeoutMs', 'Optional timeout in milliseconds.', {
+        default: fridaConfig.dexDumpTimeoutMs,
+      })
+      .required('outputDir'),
+  ),
+  tool('android_runtime_dump_session', (t) =>
+    t
+      .desc(
+        'Create or inspect a managed Android runtime dump session from Frida/ADB dump artifacts, DEX files, and /proc/PID/maps snapshots.',
+      )
+      .string('action', 'Session action: start, status, or list. Defaults to start.')
+      .string('packageName', 'Android package name for the runtime target.')
+      .number('pid', 'Runtime process id when known.')
+      .string('outputDir', 'Directory containing dumped DEX/CDEX artifacts for action=start.')
+      .string('mapsPath', 'Optional local file containing a /proc/PID/maps snapshot.')
+      .string('sessionId', 'Session id for action=status.')
+      .number('maxDexFiles', 'Maximum dumped DEX/CDEX files to summarize.', {
+        default: dexConfig.artifactDefaultLimit,
+      })
+      .number('maxDexFileBytes', 'Maximum bytes to read from each dumped DEX/CDEX file.', {
+        default: dexConfig.artifactDefaultMaxFileBytes,
+      })
+      .number('maxTotalDexBytes', 'Maximum total dumped DEX/CDEX bytes to read.', {
+        default: dexConfig.artifactDefaultMaxTotalBytes,
+      })
+      .number('maxMapsBytes', 'Maximum bytes to read from the maps snapshot.')
+      .number('maxMapsModules', 'Maximum distinct mapped module paths to return.')
+      .query(),
+  ),
   tool('frida_generate_script', (t) =>
     t
       .desc('Generate a Frida interceptor or hook script from built-in templates.')
@@ -91,11 +141,148 @@ export const binaryInstrumentTools: Tool[] = [
   ),
   tool('jadx_decompile', (t) =>
     t
-      .desc('Decompile an APK class or method using JADX.')
+      .desc('Decompile an APK class or method with JADX CLI.')
       .string('apkPath', 'Path to the APK file')
       .string('className', 'Fully qualified class name')
       .string('methodName', 'Method name to decompile')
       .required('apkPath', 'className'),
+  ),
+  tool('jadx_decompile_apk', (t) =>
+    t
+      .desc(
+        'High-level JADX APK decompile: decompile the whole APK to a stable output directory and return sourcesDir for jadx_search_code.',
+      )
+      .string('apkPath', 'Path to the APK, DEX, or CDEX file')
+      .string('outputDir', 'Optional output directory. Defaults to a temp directory.')
+      .boolean('noResources', 'Skip resources with --no-res.', { default: false })
+      .boolean('force', 'Clear outputDir before decompilation if it exists.', { default: false })
+      .required('apkPath'),
+  ),
+  tool('apktool_decode', (t) =>
+    t
+      .desc('Decode an APK using apktool to inspect resources, manifest, and smali output.')
+      .string('apkPath', 'Path to the APK file')
+      .string('outputDir', 'Optional output directory for decoded contents')
+      .boolean('force', 'Overwrite output directory if it already exists', { default: false })
+      .required('apkPath'),
+  ),
+  tool('apk_manifest_dump', (t) =>
+    t
+      .desc('Extract AndroidManifest.xml from an APK for quick inspection.')
+      .string('apkPath', 'Path to the APK file')
+      .required('apkPath'),
+  ),
+  tool('apk_manifest_query', (t) =>
+    t
+      .desc(
+        'Return a compact structured AndroidManifest summary: package, launcher activity, app class, SDKs, permissions, components, providers, and SDK/surface hints.',
+      )
+      .string('apkPath', 'Path to the APK file')
+      .boolean('includeRawManifest', 'Include decoded manifest XML in the response.', {
+        default: false,
+      })
+      .array(
+        'customSurfaceHints',
+        {
+          type: 'object',
+          description:
+            'Caller-supplied literal surface hint rule: {name, patterns:string[], kind?:"protector"|"sdk"}. Patterns are substring matches, not regex.',
+        },
+        'Optional caller-supplied hint rules. No rule table is bundled by this parameter.',
+      )
+      .required('apkPath')
+      .query(),
+  ),
+  tool('apk_static_triage', (t) =>
+    t
+      .desc(
+        'One-shot APK triage: ZIP metadata, manifest summary, native libs, asset hints, likely packers/protectors, and recommended next steps.',
+      )
+      .string('apkPath', 'Path to the APK file')
+      .number('maxEntries', 'Maximum ZIP entries to summarize.', {
+        default: apkConfig.staticTriageDefaultEntries,
+      })
+      .array(
+        'customSurfaceHints',
+        {
+          type: 'object',
+          description:
+            'Caller-supplied literal surface hint rule: {name, patterns:string[], kind?:"protector"|"sdk"}. Patterns are substring matches, not regex.',
+        },
+        'Optional caller-supplied hint rules. No rule table is bundled by this parameter.',
+      )
+      .required('apkPath')
+      .query(),
+  ),
+  tool('apk_dex_intake', (t) =>
+    t
+      .desc(
+        'Build a cohesive APK/DEX intake evidence packet: ZIP entries, manifest summary, DEX headers, native libraries, generic surface hints, caller-supplied hint matches, and next actions.',
+      )
+      .string('apkPath', 'Path to the APK file')
+      .number('maxEntries', 'Maximum ZIP entries to include in the evidence packet.', {
+        default: apkConfig.staticTriageDefaultEntries,
+      })
+      .number('maxDexFiles', 'Maximum DEX/CDEX entries to read and summarize.', {
+        default: apkConfig.dexIntakeDefaultDexFiles,
+      })
+      .number('maxDexBytes', 'Maximum bytes to read from each DEX/CDEX entry.', {
+        default: dexConfig.artifactDefaultMaxFileBytes,
+      })
+      .number('maxTotalDexBytes', 'Maximum total DEX/CDEX bytes to read from the APK.', {
+        default: dexConfig.artifactDefaultMaxTotalBytes,
+      })
+      .boolean('includeRawManifest', 'Include decoded manifest XML in the response.', {
+        default: false,
+      })
+      .array(
+        'customSurfaceHints',
+        {
+          type: 'object',
+          description:
+            'Caller-supplied literal surface hint rule: {name, patterns:string[], kind?:"protector"|"sdk"}. Patterns are substring matches, not regex.',
+        },
+        'Optional caller-supplied hint rules. No rule table is bundled by this parameter.',
+      )
+      .required('apkPath')
+      .query(),
+  ),
+  tool('dex_scan_file', (t) =>
+    t
+      .desc(
+        'Scan a binary/memory-dump file for DEX or CompactDex magic and optionally extract hits.',
+      )
+      .string('filePath', 'Path to a binary, memory dump, DEX, CDEX, VDEX, or APK-extracted blob.')
+      .string('outputDir', 'Optional output directory for extracted DEX/CDEX hits.')
+      .number('maxHits', 'Maximum DEX/CDEX headers to report.', {
+        default: dexConfig.scanDefaultMaxHits,
+      })
+      .boolean('extract', 'Write discovered hits to outputDir when file sizes are plausible.', {
+        default: false,
+      })
+      .required('filePath')
+      .query(),
+  ),
+  tool('binary_strings_extract', (t) =>
+    t
+      .desc('Extract printable ASCII/UTF-16LE strings from a binary file with regex filtering.')
+      .string('filePath', 'Path to the binary file.')
+      .number('minLength', 'Minimum string length.', {
+        default: BINARY_STRINGS_MIN_LENGTH_DEFAULT,
+      })
+      .number('maxResults', 'Maximum strings to return.', {
+        default: BINARY_STRINGS_MAX_RESULTS_DEFAULT,
+      })
+      .string('pattern', 'Optional JavaScript regex filter.')
+      .required('filePath')
+      .query(),
+  ),
+  tool('apk_native_libs_list', (t) =>
+    t
+      .desc('List packaged native shared libraries (.so) inside an APK.')
+      .string('apkPath', 'Path to the APK file')
+      .required('apkPath')
+      .query(),
   ),
   tool('unidbg_launch', (t) =>
     t
@@ -138,4 +325,31 @@ export const binaryInstrumentTools: Tool[] = [
       .required('sessionId', 'pattern')
       .query(),
   ),
+  tool('jadx_search_code', (t) =>
+    t
+      .desc(
+        'Ripgrep-backed search over jadx output. Pass decompileDir for read-only search, or apkPath to auto-decompile to a temporary directory first.',
+      )
+      .string('decompileDir', 'Absolute path to an existing jadx decompile output directory.')
+      .string('apkPath', 'Optional APK path. Used only when decompileDir is omitted.')
+      .string('query', 'Search query (regex unless `literal:true`)')
+      .boolean('literal', 'Treat `query` as a literal string, not a regex', { default: false })
+      .boolean('caseInsensitive', 'Case-insensitive matching', { default: false })
+      .integer('contextLines', 'Lines of context around each match', {
+        default: 2,
+        minimum: 0,
+        maximum: 20,
+      })
+      .integer('maxMatchesPerFile', 'Cap on matches recorded per file', { minimum: 1 })
+      .integer('maxResults', 'Hard ceiling on total matches across all files', { minimum: 1 })
+      .array(
+        'globs',
+        { type: 'string', description: 'Glob pattern (negative globs may start with !)' },
+        'File globs applied during enumeration. Defaults to `**/*.java`, `**/*.kt`.',
+      )
+      .required('query')
+      .query(),
+  ),
+  ...apkPackerTools,
+  ...binarySecretsTools,
 ];

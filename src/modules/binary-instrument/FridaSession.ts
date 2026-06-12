@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { probeCommand, type ProbeResult } from '@modules/external/ToolProbe';
 import { logger } from '@utils/logger';
 import { FRIDA_TIMEOUT_MS } from '@src/constants';
+import { PrerequisiteError } from '@errors/PrerequisiteError';
+import { ToolError } from '@errors/ToolError';
 
 const FRIDA_MAX_BUFFER_BYTES = 5 * 1024 * 1024;
 
@@ -56,12 +58,12 @@ export class FridaSession {
   async attach(target: string): Promise<string> {
     const availability = await this.getAvailability();
     if (!availability.available) {
-      throw new Error(availability.reason ?? 'Frida CLI is not available');
+      throw new PrerequisiteError(availability.reason ?? 'Frida CLI is not available');
     }
 
     const probe = await this.runFridaCommand(target, 'console.log("__frida_attach_ok__");');
     if (probe.error) {
-      throw new Error(probe.error);
+      throw new ToolError('CONNECTION', probe.error);
     }
 
     const sessionId = randomUUID();
@@ -251,7 +253,7 @@ export class FridaSession {
   private requireActiveSession(): FridaSessionRecord {
     const session = this.getActiveSessionRecord();
     if (!session) {
-      throw new Error('No active Frida session. Call attach() first.');
+      throw new PrerequisiteError('No active Frida session. Call attach() first.');
     }
 
     return session;
@@ -306,13 +308,13 @@ export class FridaSession {
   }
 
   private parseModuleList(output: string): FridaModuleInfo[] {
-    const payload = this.extractJsonPayload(output);
-    if (!Array.isArray(payload)) {
+    const data = this.extractJsonData(output);
+    if (!Array.isArray(data)) {
       return [];
     }
 
     const modules: FridaModuleInfo[] = [];
-    for (const entry of payload) {
+    for (const entry of data) {
       if (!this.isRecord(entry)) {
         continue;
       }
@@ -333,13 +335,13 @@ export class FridaSession {
   }
 
   private parseFunctionList(output: string): FridaFunctionInfo[] {
-    const payload = this.extractJsonPayload(output);
-    if (!Array.isArray(payload)) {
+    const data = this.extractJsonData(output);
+    if (!Array.isArray(data)) {
       return [];
     }
 
     const functions: FridaFunctionInfo[] = [];
-    for (const entry of payload) {
+    for (const entry of data) {
       if (!this.isRecord(entry)) {
         continue;
       }
@@ -359,13 +361,13 @@ export class FridaSession {
   }
 
   private parseSymbolList(output: string): FridaSymbolInfo[] {
-    const payload = this.extractJsonPayload(output);
-    if (!Array.isArray(payload)) {
+    const data = this.extractJsonData(output);
+    if (!Array.isArray(data)) {
       return [];
     }
 
     const symbols: FridaSymbolInfo[] = [];
-    for (const entry of payload) {
+    for (const entry of data) {
       if (!this.isRecord(entry)) {
         continue;
       }
@@ -388,7 +390,7 @@ export class FridaSession {
     return symbols;
   }
 
-  private extractJsonPayload(output: string): unknown {
+  private extractJsonData(output: string): unknown {
     const candidates = output
       .split(/\r?\n/)
       .map((line) => line.trim())

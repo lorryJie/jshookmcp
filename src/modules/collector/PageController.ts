@@ -2,8 +2,8 @@ import type { CodeCollector } from '@modules/collector/CodeCollector';
 import { logger } from '@utils/logger';
 import { PAGE_FRAME_SELECTOR_TIMEOUT_MS, PAGE_NETWORK_IDLE_TIMEOUT_MS } from '@src/constants';
 import { setTimeout as asyncSetTimeout } from 'node:timers/promises';
-import type { Page, Frame } from 'rebrowser-puppeteer-core';
-import type { BrowserTargetInfo } from '@modules/browser/BrowserTargetSessionManager';
+import type { Page, Frame, NewDocumentScriptEvaluation } from 'rebrowser-puppeteer-core';
+import type { BrowserTargetInfo } from '@modules/browser/BrowserTargetSessionManager.shared';
 import {
   toChromeCompatibleWaitUntil,
   type PageNavigationWaitUntil,
@@ -70,6 +70,11 @@ interface UploadContextLike {
 }
 
 export class PageController {
+  private pagePersistentScripts = new WeakMap<
+    Page,
+    Map<string, { source: string; identifier: string }>
+  >();
+
   constructor(private collector: CodeCollector) {}
 
   private getChromeNavigationWaitUntil(
@@ -101,6 +106,61 @@ export class PageController {
     return await this.collector
       .getBrowserTargetSessionManager()
       .addScriptToEvaluateOnNewDocument(source);
+  }
+
+  async addPersistentScriptToManagedTargets(
+    source: string,
+    options?: { id?: string; targetTypes?: string[]; evaluateNow?: boolean },
+  ): Promise<{ identifier: string; appliedTargets: number }> {
+    return await this.collector
+      .getBrowserTargetSessionManager()
+      .registerPersistentScript(source, options);
+  }
+
+  async addScriptToPageEvaluateOnNewDocument(
+    source: string,
+    options?: { id?: string },
+  ): Promise<NewDocumentScriptEvaluation | { identifier: string; reused: true }> {
+    const page = await this.collector.getActivePage();
+    if (!options?.id) {
+      return (await evaluateOnNewDocumentWithTimeout(page, source)) as NewDocumentScriptEvaluation;
+    }
+
+    const registry = this.getPagePersistentScriptRegistry(page);
+    const existing = registry.get(options.id);
+    if (existing?.source === source) {
+      return {
+        identifier: existing.identifier,
+        reused: true,
+      };
+    }
+
+    if (existing?.identifier) {
+      await page.removeScriptToEvaluateOnNewDocument(existing.identifier).catch(() => {
+        // Ignore stale identifier races; replacement registration below is the source of truth.
+      });
+    }
+
+    const registration = (await evaluateOnNewDocumentWithTimeout(
+      page,
+      source,
+    )) as NewDocumentScriptEvaluation;
+    registry.set(options.id, {
+      source,
+      identifier: registration.identifier,
+    });
+    return registration;
+  }
+
+  private getPagePersistentScriptRegistry(
+    page: Page,
+  ): Map<string, { source: string; identifier: string }> {
+    let registry = this.pagePersistentScripts.get(page);
+    if (!registry) {
+      registry = new Map<string, { source: string; identifier: string }>();
+      this.pagePersistentScripts.set(page, registry);
+    }
+    return registry;
   }
 
   async navigate(
@@ -338,16 +398,43 @@ export class PageController {
 
   /** List all frames in the active page with URL and name info. */
   async listFrames(): Promise<
-    Array<{ url: string; name: string; id: string; isMainFrame: boolean }>
+    Array<{
+      frameId: string;
+      url: string;
+      name: string;
+      parentFrameId: string | null;
+      parentUrl: string | null;
+      isMainFrame: boolean;
+      crossOrigin: boolean;
+    }>
   > {
     const page = await this.collector.getActivePage();
     const mainFrame = page.mainFrame();
-    return page.frames().map((frame) => ({
-      url: frame.url(),
-      name: frame.name() || '',
-      id: ((frame as unknown as Record<string, unknown>)['_id'] as string | undefined) || '',
-      isMainFrame: frame === mainFrame,
-    }));
+    const frames = page.frames();
+    const mainOrigin = safeFrameOrigin(mainFrame.url());
+
+    return frames.map((frame) => {
+      const frameId =
+        ((frame as unknown as Record<string, unknown>)['_id'] as string | undefined) || frame.url();
+      const parent = frame.parentFrame();
+      const parentId = parent
+        ? ((parent as unknown as Record<string, unknown>)['_id'] as string | undefined) ||
+          parent.url()
+        : null;
+      const frameOrigin = safeFrameOrigin(frame.url());
+
+      return {
+        frameId,
+        url: frame.url(),
+        name: frame.name() || '',
+        parentFrameId: parentId,
+        parentUrl: parent?.url() || null,
+        isMainFrame: frame === mainFrame,
+        crossOrigin: Boolean(
+          frame !== mainFrame && frameOrigin && mainOrigin && frameOrigin !== mainOrigin,
+        ),
+      };
+    });
   }
 
   async getURL(): Promise<string> {
@@ -646,8 +733,9 @@ async function checkPageCDPHealth(page: Page, timeoutMs = 500): Promise<void> {
   const timer = asyncSetTimeout(timeoutMs, undefined, { signal: ac.signal }).then(() => {
     throw new Error('cdp_unreachable');
   });
+  let cdp: import('rebrowser-puppeteer-core').CDPSession | null = null;
   try {
-    const cdp = await Promise.race([page.createCDPSession(), timer as unknown as Promise<never>]);
+    cdp = await Promise.race([page.createCDPSession(), timer as unknown as Promise<never>]);
     await Promise.race([
       cdp.send('Runtime.evaluate', { expression: '1', returnByValue: true }),
       timer as unknown as Promise<never>,
@@ -665,6 +753,13 @@ async function checkPageCDPHealth(page: Page, timeoutMs = 500): Promise<void> {
     throw err;
   } finally {
     ac.abort();
+    if (cdp) {
+      try {
+        await cdp.detach();
+      } catch {
+        // Best-effort detach — session may already be closed
+      }
+    }
   }
 }
 
@@ -710,18 +805,27 @@ export async function evaluateOnContextWithTimeout<Args extends readonly unknown
   // Fail fast: detect zombie CDP sessions before they block evaluate().
   await checkPageCDPHealth(page);
 
-  return Promise.race([
-    context.evaluate(
-      pageFunction as string | ((...args: never[]) => Result),
-      ...([...args] as never[]),
-    ),
-    new Promise<never>((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`page.evaluate timed out after ${timeoutMs}ms`)),
-        timeoutMs,
+  // Race evaluate against a timer; clear the timer when evaluate wins so we don't
+  // leave a dangling setTimeout. NOTE: Playwright/Puppeteer don't expose a clean
+  // way to cancel an in-flight evaluate(), so the JS still runs to completion in
+  // the page — the timeout only protects the caller from blocking forever.
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      context.evaluate(
+        pageFunction as string | ((...args: never[]) => Result),
+        ...([...args] as never[]),
       ),
-    ),
-  ]);
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`page.evaluate timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
 }
 
 export async function evaluateWithTimeout<Args extends readonly unknown[], Result>(
@@ -774,6 +878,14 @@ export async function evaluateOnNewDocumentWithTimeout<Args extends readonly unk
       ),
     ),
   ]);
+}
+
+function safeFrameOrigin(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
 }
 
 /** Structural type for pages with coverage API (Puppeteer / rebrowser-puppeteer). */

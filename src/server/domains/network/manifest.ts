@@ -1,9 +1,5 @@
 import type { DomainManifest, MCPServerContext } from '@server/domains/shared/registry';
-import {
-  defineMethodRegistrations,
-  ensureBrowserCore,
-  toolLookup,
-} from '@server/domains/shared/registry';
+import { defineMethodRegistrations, toolLookup } from '@server/domains/shared/registry';
 import { advancedTools } from '@server/domains/network/definitions';
 import type { AdvancedToolHandlers } from '@server/domains/network/index';
 
@@ -45,8 +41,14 @@ const registrations = defineMethodRegistrations<H, (typeof advancedTools)[number
     { tool: 'http2_probe', method: 'handleHttp2Probe' },
     { tool: 'http2_frame_build', method: 'handleHttp2FrameBuild' },
     { tool: 'network_rtt_measure', method: 'handleNetworkRttMeasure' },
+    { tool: 'network_latency_stats', method: 'handleNetworkLatencyStats' },
     { tool: 'network_traceroute', method: 'handleNetworkTraceroute' },
     { tool: 'network_icmp_probe', method: 'handleNetworkIcmpProbe' },
+    { tool: 'dns_resolve', method: 'handleDnsResolve' },
+    { tool: 'dns_reverse', method: 'handleDnsReverse' },
+    { tool: 'dns_probe', method: 'handleDnsProbe' },
+    { tool: 'dns_cname_chain', method: 'handleDnsCnameChain' },
+    { tool: 'dns_bulk_resolve', method: 'handleDnsBulkResolve' },
     { tool: 'network_extract_auth', method: 'handleNetworkExtractAuth' },
     { tool: 'network_export_har', method: 'handleNetworkExportHar' },
     { tool: 'network_replay_request', method: 'handleNetworkReplayRequest' },
@@ -56,9 +58,35 @@ const registrations = defineMethodRegistrations<H, (typeof advancedTools)[number
   ],
 });
 
+// Tools that can operate without a browser. Everything else requires ensureBrowserCore.
+const RAW_NETWORK_TOOLS = new Set([
+  'http_request_build',
+  'http_plain_request',
+  'http2_probe',
+  'http2_frame_build',
+  'network_rtt_measure',
+  'network_latency_stats',
+  'network_traceroute',
+  'network_icmp_probe',
+  'dns_resolve',
+  'dns_reverse',
+  'dns_probe',
+  'dns_cname_chain',
+  'dns_bulk_resolve',
+]);
+
 async function ensure(ctx: MCPServerContext): Promise<H> {
   const { AdvancedToolHandlers } = await import('@server/domains/network/index');
-  await ensureBrowserCore(ctx);
+
+  // Skip browser-core initialization if only raw tools are being activated
+  const needsBrowser =
+    !(ctx.activatedToolNames instanceof Set) ||
+    [...ctx.activatedToolNames].some((name) => !RAW_NETWORK_TOOLS.has(name));
+
+  if (needsBrowser) {
+    const { ensureBrowserCore } = await import('@server/registry/ensure-browser-core');
+    await ensureBrowserCore(ctx);
+  }
 
   if (!ctx.advancedHandlers) {
     ctx.advancedHandlers = new AdvancedToolHandlers(
@@ -88,16 +116,15 @@ const manifest: DomainManifest<typeof DEP_KEY, H, typeof DOMAIN> = {
       /(抓包|拦截|监控|hook).*(网络|请求|响应|api|流量)/i,
     ],
     priority: 100,
-    tools: [
-      'run_extension_workflow',
-      'list_extension_workflows',
-      'network_monitor',
-      'page_navigate',
-      'network_get_requests',
-    ],
+    // Only list tools owned by this domain. workflow-domain tools
+    // (run_extension_workflow / list_extension_workflows) belong to the
+    // workflow manifest; routing them here caused an ownership conflict
+    // because both manifests claimed the same names.
+    tools: ['network_monitor', 'page_navigate', 'network_get_requests'],
     hint:
-      'Network capture workflow: prefer extension workflows first; otherwise bootstrap browser/page state ->' +
-      'enable capture -> navigate or act -> inspect captured requests',
+      'Network capture workflow: bootstrap browser/page state ->' +
+      ' enable capture -> navigate or act -> inspect captured requests.' +
+      ' (Tip: list_extension_workflows can suggest higher-level recipes.)',
   },
 
   prerequisites: {

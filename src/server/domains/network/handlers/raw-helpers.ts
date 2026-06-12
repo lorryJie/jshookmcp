@@ -5,6 +5,7 @@
  */
 
 import type { LookupAddress } from 'node:dns';
+import * as dns from 'node:dns/promises';
 import * as http2 from 'node:http2';
 import * as net from 'node:net';
 import * as tls from 'node:tls';
@@ -28,7 +29,7 @@ import {
   resolveNetworkTarget,
   type NetworkAuthorizationInput,
   type ResolvedNetworkTarget,
-} from '@server/domains/network/ssrf-policy';
+} from '@utils/network/ssrf-policy';
 
 const HTTP_TOKEN_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
@@ -151,7 +152,9 @@ export function computeRttStats(samples: number[]) {
     maxMs: sorted[sorted.length - 1]!,
     avgMs: roundMs(sorted.reduce((s, v) => s + v, 0) / sorted.length),
     p50Ms: sorted[Math.floor(sorted.length * 0.5)]!,
+    p90Ms: sorted[Math.floor(sorted.length * 0.9)]!,
     p95Ms: sorted[Math.floor(sorted.length * 0.95)]!,
+    p99Ms: sorted[Math.floor(sorted.length * 0.99)]!,
   };
 }
 
@@ -412,6 +415,63 @@ export function normalizeHttp2Headers(
   return normalized;
 }
 
+export async function resolveAuthorizedHostTarget(
+  rawHost: string,
+  authorization: NetworkAuthorizationInput | undefined,
+  operationLabel: string,
+): Promise<string> {
+  const authorizationPolicy = createNetworkAuthorizationPolicy(authorization);
+  const allowLegacyLocalSsrf = !authorizationPolicy && isLocalSsrfBypassEnabled();
+
+  if (
+    authorizationPolicy &&
+    authorizationPolicy.allowPrivateNetwork &&
+    !hasAuthorizedTargets(authorizationPolicy)
+  ) {
+    throw new Error(
+      'authorization must include at least one allowed host or CIDR when enabling private network access.',
+    );
+  }
+
+  if (isNetworkAuthorizationExpired(authorizationPolicy)) {
+    throw new Error('authorization expired before the request was executed.');
+  }
+
+  let resolvedAddress: string;
+  if (net.isIPv4(rawHost)) {
+    resolvedAddress = rawHost;
+  } else {
+    try {
+      const result = await dns.resolve(rawHost, 'A');
+      resolvedAddress = result[0]!;
+    } catch {
+      throw new Error(`${operationLabel} blocked: DNS resolution failed for "${rawHost}"`);
+    }
+  }
+
+  const hostnameIsPrivate = isPrivateHost(rawHost);
+  const addressIsPrivate = isPrivateHost(resolvedAddress);
+  const isLoopback = isLoopbackHost(rawHost) || isLoopbackHost(resolvedAddress);
+
+  if ((hostnameIsPrivate || addressIsPrivate) && !isLoopback && !allowLegacyLocalSsrf) {
+    const isPrivateTargetAllowed =
+      authorizationPolicy?.allowPrivateNetwork === true &&
+      isAuthorizedNetworkTarget(authorizationPolicy, { hostname: rawHost, resolvedAddress });
+    if (!isPrivateTargetAllowed) {
+      if (!hostnameIsPrivate && addressIsPrivate) {
+        throw new Error(
+          `${operationLabel} blocked: "${rawHost}" resolved to private IP ${resolvedAddress}`,
+        );
+      }
+      throw new Error(
+        `${operationLabel} blocked: target "${rawHost}" resolves to a private or reserved address.`,
+      );
+    }
+  }
+
+  return resolvedAddress;
+}
+
 export function normalizeAlpnProtocol(protocol: string | false | null | undefined): string | null {
   if (!protocol) return null;
   const trimmed = protocol.trim();
@@ -438,6 +498,7 @@ export function performHttp2ProbeInternal(options: {
   maxBodyBytes: number;
   effectivePort: number;
   requestedAlpnProtocols: string[];
+  connectTimeoutMs?: number;
 }): Promise<{
   responseHeaders: http2.IncomingHttpHeaders;
   bodyBuffer: Buffer;
@@ -454,6 +515,7 @@ export function performHttp2ProbeInternal(options: {
     maxBodyBytes,
     effectivePort,
     requestedAlpnProtocols,
+    connectTimeoutMs = 10_000,
   } = options;
   let observedAlpnProtocol: string | null = null;
 
@@ -475,11 +537,19 @@ export function performHttp2ProbeInternal(options: {
             ALPNProtocols: requestedAlpnProtocols,
             rejectUnauthorized: true,
           });
+          // Connect timeout — fail fast on TCP/TLS handshake hang (e.g. Cloudflare TCP drop)
+          const connectTimer = setTimeout(() => {
+            socket.destroy(
+              new Error(`Timed out connecting to ${url.toString()} (${connectTimeoutMs}ms)`),
+            );
+          }, connectTimeoutMs);
+          socket.once('secureConnect', () => {
+            clearTimeout(connectTimer);
+            observedAlpnProtocol = normalizeAlpnProtocol(socket.alpnProtocol);
+          });
+          socket.once('error', () => clearTimeout(connectTimer));
           socket.setTimeout(timeoutMs, () => {
             socket.destroy(new Error(`Timed out probing HTTP/2 endpoint ${url.toString()}`));
-          });
-          socket.once('secureConnect', () => {
-            observedAlpnProtocol = normalizeAlpnProtocol(socket.alpnProtocol);
           });
           connectedSocket = socket;
           return socket;

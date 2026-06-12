@@ -6,6 +6,8 @@ import {
 } from '@server/domains/shared/registry';
 import { browserTools, advancedBrowserToolDefinitions } from '@server/domains/browser/definitions';
 import type { BrowserToolHandlers } from '@server/domains/browser/index';
+import { getRuntimeState } from '@server/runtime/ServerRuntimeState';
+import { BrowserSessionCoordinator } from '@server/runtime/BrowserSessionCoordinator';
 
 const DOMAIN = 'browser' as const;
 const DEP_KEY = 'browserHandlers' as const;
@@ -18,6 +20,7 @@ const registrations = defineMethodRegistrations<H, (typeof toolDefinitions)[numb
   lookup: t,
   entries: [
     { tool: 'get_detailed_data', method: 'handleGetDetailedData' },
+    { tool: 'get_offloaded_data', method: 'handleGetOffloadedData' },
     { tool: 'browser_attach', method: 'handleBrowserAttach' },
     { tool: 'browser_list_tabs', method: 'handleBrowserListTabs' },
     { tool: 'browser_list_cdp_targets', method: 'handleBrowserListCdpTargets' },
@@ -32,6 +35,7 @@ const registrations = defineMethodRegistrations<H, (typeof toolDefinitions)[numb
     { tool: 'page_reload', method: 'handlePageReload' },
     { tool: 'page_back', method: 'handlePageBack' },
     { tool: 'page_forward', method: 'handlePageForward' },
+    { tool: 'page_list_frames', method: 'handlePageListFrames' },
     { tool: 'page_click', method: 'handlePageClick' },
     { tool: 'page_type', method: 'handlePageType' },
     { tool: 'page_upload_files', method: 'handlePageUploadFiles' },
@@ -66,6 +70,8 @@ const registrations = defineMethodRegistrations<H, (typeof toolDefinitions)[numb
     { tool: 'indexeddb_dump', method: 'handleIndexedDBDump' },
     { tool: 'js_heap_search', method: 'handleJSHeapSearch' },
     { tool: 'tab_workflow', method: 'handleTabWorkflow' },
+    { tool: 'browser_codegen_start', method: 'handleBrowserCodegenStart' },
+    { tool: 'browser_codegen_stop', method: 'handleBrowserCodegenStop' },
     { tool: 'human_mouse', method: 'handleHumanMouse' },
     { tool: 'human_scroll', method: 'handleHumanScroll' },
     { tool: 'human_typing', method: 'handleHumanTyping' },
@@ -85,12 +91,31 @@ async function ensure(ctx: MCPServerContext): Promise<H> {
   await ensureBrowserCore(ctx);
 
   if (!ctx.browserHandlers) {
+    const compatCtx = ctx as unknown as Record<string, unknown>;
+    const getDomainInstance =
+      typeof ctx.getDomainInstance === 'function' ? ctx.getDomainInstance.bind(ctx) : null;
+    const setDomainInstance =
+      typeof ctx.setDomainInstance === 'function' ? ctx.setDomainInstance.bind(ctx) : null;
+    const coordinator =
+      getDomainInstance?.<BrowserSessionCoordinator>('browserSessionCoordinator') ??
+      (compatCtx.browserSessionCoordinator as BrowserSessionCoordinator | undefined) ??
+      new BrowserSessionCoordinator(() => ctx.collector);
+    if (setDomainInstance) {
+      setDomainInstance('browserSessionCoordinator', coordinator);
+    } else {
+      compatCtx.browserSessionCoordinator = coordinator;
+    }
     ctx.browserHandlers = new BrowserToolHandlers(
       ctx.collector!,
       ctx.pageController!,
       ctx.scriptManager!,
       ctx.consoleMonitor!,
       ctx.eventBus,
+      () => coordinator.getCurrentSessionId(),
+      coordinator,
+      (snapshot) => {
+        getRuntimeState(ctx)?.setBrowserAttach(snapshot);
+      },
     );
   }
   return ctx.browserHandlers;

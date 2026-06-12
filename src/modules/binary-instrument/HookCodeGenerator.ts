@@ -4,6 +4,7 @@ import type {
   HookParameter,
   HookTemplate,
 } from './types';
+import { ToolError } from '@errors/ToolError';
 
 type HookCategory =
   | 'jni'
@@ -41,7 +42,10 @@ export class HookCodeGenerator {
 
   exportScript(templates: HookTemplate[], format: string): string {
     if (format !== 'frida') {
-      throw new Error('Unsupported export format');
+      throw new ToolError(
+        'VALIDATION',
+        `Unsupported export format: "${format}". Only "frida" is supported.`,
+      );
     }
 
     const lines = [
@@ -143,9 +147,9 @@ export class HookCodeGenerator {
       case 'rsa':
         return 'RSA crypto hook for key operation tracing';
       case 'base64':
-        return 'Base64 transform hook for encoded payload tracing';
+        return 'Base64 transform hook for encoded data tracing';
       case 'network':
-        return 'Network hook for request and payload tracing';
+        return 'Network hook for request and response body tracing';
       case 'file-io':
         return 'File I/O hook for filesystem access tracing';
       case 'string':

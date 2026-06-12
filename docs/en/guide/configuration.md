@@ -52,11 +52,15 @@ Runtime configuration is defined by `src/utils/config.ts`. The current runtime d
 | `CAPTCHA_API_KEY`            | API key for automatic CAPTCHA solving providers.    | no default                                        |
 | `CAPTCHA_SOLVER_BASE_URL`    | Base URL for the external CAPTCHA solver service.   | no default                                        |
 | `CAPTCHA_2CAPTCHA_BASE_URL`  | Alternate base URL for 2Captcha-compatible solvers. | no default                                        |
+| `CAPTCHA_ANTICAPTCHA_BASE_URL` | Base URL for the Anti-Captcha JSON task API.      | no default                                        |
+| `CAPTCHA_CAPSOLVER_BASE_URL`   | Base URL for the CapSolver JSON task API.         | no default                                        |
 | `CAPTCHA_DEFAULT_TIMEOUT_MS` | Default CAPTCHA wait timeout.                       | `180000`                                          |
 | `CAPTCHA_MIN_TIMEOUT_MS`     | Minimum CAPTCHA timeout.                            | `5000`                                            |
 | `CAPTCHA_MAX_TIMEOUT_MS`     | Maximum CAPTCHA timeout.                            | `600000`                                          |
 | `CAPTCHA_MAX_RETRIES`        | Maximum CAPTCHA solve retries.                      | `5`                                               |
 | `CAPTCHA_DEFAULT_RETRIES`    | Default CAPTCHA solve retries.                      | `2`                                               |
+
+> `captcha_vision_solve` and `widget_challenge_solve` are now explicit-input driven. Automated callers should pass `taskKind`, `siteKey`, `imageBase64`, `callbackName`, and `responseSelector` instead of relying on built-in page-signature probing.
 
 ### 2. Server identity and logging
 
@@ -73,7 +77,7 @@ Runtime configuration is defined by `src/utils/config.ts`. The current runtime d
 
 | Variable                                  | Purpose                                                           | Default / Typical value          |
 | ----------------------------------------- | ----------------------------------------------------------------- | -------------------------------- |
-| `MCP_TOOL_PROFILE`                        | Selects the tool profile: `search`, `workflow`, or `full`.        | default: `search`                |
+| `MCP_TOOL_PROFILE`                        | Selects the tool profile: `search`, `workflow`, or `full`. `search` starts with only 8 meta-tools registered; other domains are enabled on demand through `activate_domain` / `call_tool`. | default: `search`                |
 | `MCP_TOOL_DOMAINS`                        | Explicit domain allowlist; overrides `MCP_TOOL_PROFILE` when set. | no default                       |
 | `SEARCH_INTENT_TOOL_BOOST_RULES_JSON`     | JSON override for explicit intent-to-tool ranking boosts.         | no default                       |
 | `MCP_DEFAULT_PLUGIN_BOOST_TIER`           | Default tier for plugin auto-registration during boost.           | `full`                           |

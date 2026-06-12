@@ -12,63 +12,42 @@ Strictly prohibit the abuse of Plugins as a replacement for Workflow execution g
 ## Minimal Viable Plugin (MVP) Topology
 
 Built upon a declarative fluent builder pattern, all capability orchestration must adhere to an inline, brace-free chaining invocation convention.
-Reference the core file `src/manifest.ts` within the `jshook_plugin_template` repository:
+Reference `manifest.ts` within the `jshook_plugin_template` repository:
 
 ```ts
-import type { PluginContract, PluginLifecycleContext } from '@jshookmcp/extension-sdk/plugin';
+import { createExtension, jsonResponse } from '@jshookmcp/extension-sdk/plugin';
 
-// Core plugin implementation
-const myPlugin: PluginContract = {
-  kind: 'plugin-manifest',
-  version: 1,
-
-  // Core identity fields
-  id: 'io.github.example.my-first-plugin',
-  name: 'My First Hook Plugin',
-  pluginVersion: '1.0.0',
-  entry: 'manifest.ts',
-
-  // Security permissions: declare hard memory boundaries
-  permissions: {
-    toolExecution: {
-      allowTools: ['browser_click', 'network_get_requests'],
+export default createExtension('io.github.example.my-first-plugin', '1.0.0')
+  .compatibleCore('^0.1.0')
+  .allowTool(['page_click', 'network_get_requests'])
+  .tool(
+    'my_custom_tool',
+    'Execute DOM mutation and fetch side-effect traces.',
+    { selector: { type: 'string', description: 'CSS selector to click' } },
+    async (args, ctx) => {
+      const clickRes = await ctx.invokeTool('page_click', { selector: String(args.selector) });
+      return jsonResponse({ success: true, result: clickRes });
     },
-  },
-
-  // Contributions: automatically register new tool RPC points
-  contributes: {
-    domains: [
-      {
-        name: 'my_plugin_domain',
-        tools: [
-          {
-            name: 'my_custom_tool',
-            description: 'Execute DOM mutation and fetch side-effect traces.',
-            handler: async (args, ctx) => {
-              // Direct invocation of native atomic capabilities inside a controlled sandbox
-              const clickRes = await ctx.invokeTool('browser_click', { text: 'Login' });
-              return `Clicked! Result: ${clickRes}`;
-            },
-          },
-        ],
-      },
-    ],
-  },
-
-  // Lifecycle hooks: perform sandbox isolation initialization
-  async onLoad(ctx: PluginLifecycleContext) {
+  )
+  .onLoad((ctx) => {
     ctx.setRuntimeData('init_stamp', Date.now());
-  },
-};
+  });
+```
 
-export default myPlugin;
+Outward-facing plugin metadata now lives in `meta.yaml`, while `manifest.ts` stays focused on runtime declarations:
+
+```yaml
+name: My First Plugin
+description: Execute DOM mutation and fetch traces.
+author: your-team
+source_repo: https://github.com/your-org/my-first-plugin
 ```
 
 **Contract Breakdown:**
 
-- `id` / `name`: Distinct identity of the plugin isolated within the core registry.
-- `permissions`: A mandatory security assertion. You **must explicitly declare** accessible built-in tools; illicit boundary traversing via `invokeTool` will trigger a fatal system exception.
-- `contributes.domains`: Projects new MCP tools into the user-facing RPC gateway.
+- `createExtension(id, version)`: Distinct identity root for the plugin isolated within the core registry.
+- `.allowTool(...)`: Mandatory built-in tool allowlist; illicit boundary traversing via `invokeTool` will trigger an exception.
+- `.tool(...)`: Projects new MCP tools into the user-facing RPC gateway.
 - `invokeTool`: Invokes internal atomic actions strictly within the verified `ctx` sandbox context.
 - `onLoad`: The initial bootstrap hook, reserved for dependency allocation and logging prior to state mutation.
 
@@ -78,6 +57,7 @@ export default myPlugin;
 
 - Source Template: `https://github.com/vmoranv/jshook_plugin_template`
 - Mount Main Process Pointer: `export MCP_PLUGIN_ROOTS=<path-to-cloned-jshook_plugin_template>`
+- PowerShell: `$env:MCP_PLUGIN_ROOTS = "<path-to-cloned-jshook_plugin_template>"`
 
 ### 2. Pre-compilation Constraint Verification
 
@@ -94,7 +74,7 @@ pnpm run check
 Prior to mounting, you must supersede the globally conflicting references originating from the template:
 
 - `PLUGIN_ID` (Strictly requires the x.y.z reverse-domain format, e.g., `io.github.example.my-plugin`)
-- Extension Metadata (`manifest.name` / `manifest.pluginVersion` / `manifest.description`)
+- `meta.yaml` fields: `name` / `description` / `author` / `source_repo`
 
 ### 4. Privilege Sandbox Allowlist Clamping
 
@@ -110,16 +90,7 @@ The Plugin engine relies on an allowlist mechanism to validate side-effect capab
 - Adhere to the principle of least privilege immediately at the initial lifecycle setup.
 - The use of generalized wildcards (`*`) is strictly forbidden during pre-production validation tiers.
 
-## API Resolution: `PluginContract` Lifecycle
-
-### Core Schema Definition (`manifest`)
-
-Static fields must remain immutable post-initialization:
-
-- `kind: 'plugin-manifest'`
-- `version: 1`
-- `id` / `name` / `pluginVersion` / `entry`
-- `compatibleCore` / `permissions` / `activation` / `contributes`
+## API Resolution: `ExtensionBuilder` Lifecycle
 
 ### Runtime Context Hooks
 
@@ -140,14 +111,6 @@ Execute boundary condition interceptors:
 - Verify essential configuration parity.
 - Probe dependencies for health availability.
 - Audit baseUrl / Loopback endpoint legitimacy.
-
-#### `onRegister(ctx)`
-
-Dynamic release of secondary internal tooling subsets (as an alternative to static `manifest.contributes.*` schemas):
-
-- `ctx.registerDomain(...)`
-- `ctx.registerWorkflow(...)`
-- `ctx.registerMetric(...)`
 
 #### `onActivate(ctx)` / `onDeactivate(ctx)` / `onUnload(ctx)`
 
@@ -185,40 +148,31 @@ Handle fleeting state bits confined functionally to the Plugin closure context:
 
 Asserts compliance queries concerning capability declarations mapped against the manifest constraints.
 
-## `manifest.contributes.*` vs `ctx.register*()`
-
-Both architectures facilitate runtime object contributions:
-
-- `manifest.contributes.*`: Employs static definition vectors; prioritized for auditing and declarative tracking.
-- `ctx.register*()`: Employs dynamic injection vectors; prioritized for environment-conditional capability toggles.
-
-Irrespective of formulation, the core OS enforces execution limits via `toolExecution` capability checks.
-
 ## Helper Implementation Vectors
 
-### `loadPluginEnv(import.meta.url)`
-
-- Sandbox-aware configuration fetching, ingesting `.env` into local Plugin boundaries.
-- Refrains implicitly from permeating or mutating the global process tree environment.
-
-### `getPluginBooleanConfig(ctx, pluginId, key, fallback)`
-
-Strategy pattern deployment resolving across configuration levels (Prioritizing specific `.env` keys over mapped configurations in `plugins.<pluginId>.<key>`).
-
-### `getPluginBoostTier(pluginId)`
-
-Evaluates the minimal tier mandatory for Plugin auto-registration behavior in unison with the designated active profile.
+- `jsonResponse(payload)` / `errorResponse(tool, error, extra?)`
+- `checkExternalCommand(...)` / `runProcess(...)`
+- `resolveOutputDirectory(...)` / `requestJson(...)`
 
 ## Context Reentry Affirmation
 
 Assert the lifecycle integrity via the service terminal sequence:
 
-1. Reinitialize context via `extensions_reload`.
-2. Map capability via `extensions_list`.
-3. Force endpoint resolution utilizing `search_tools`.
+1. Reinitialize context via `reload_extensions`.
+2. Inspect the loaded plugin/tool state via `list_extensions`.
+3. Call the extension tool directly, or use `search_tools` / `describe_tool` to inspect it.
 4. Run `list_extension_workflows` (If Workflow topologies are concurrently injected).
 
 Rerun standard TS-to-JS transpilation chains via `pnpm run build` prior to invoking the subsystem reload probe.
+
+`reload_extensions` now registers extension tools directly into the MCP tool list when they are visible in the current profile. You only need `activate_tools` later for tools outside the current profile, or `call_tool` when a client failed to refresh its cached tool list.
+
+The `tools` array returned by `list_extensions` / `reload_extensions` now exposes:
+
+- `profiles`: declared profile visibility
+- `visibleInCurrentProfile`: whether the tool is visible in the current session profile
+- `active`: whether the tool is currently registered in the tool list
+- `activationSource`: how it became active (`reload` / `activate_tools` / `activate_domain`)
 
 ## Conventional Transgressions
 

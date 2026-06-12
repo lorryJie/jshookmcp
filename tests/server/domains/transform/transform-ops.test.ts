@@ -1,25 +1,8 @@
+// oxlint-disable-next-line no-unassigned-import -- side-effect mock
+import './_transform-mocks';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TransformKind } from '@server/domains/transform/handlers.impl.transform-base';
 import { TransformToolHandlersOps } from '@server/domains/transform/handlers.impl.transform-ops';
-
-vi.mock('@utils/WorkerPool', () => ({
-  WorkerPool: class MockWorkerPool {
-    submit = vi.fn();
-    close = vi.fn().mockResolvedValue(undefined);
-  },
-}));
-
-vi.mock('@src/constants', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    TRANSFORM_WORKER_TIMEOUT_MS: 5000,
-    TRANSFORM_CRYPTO_POOL_MAX_WORKERS: 2,
-    TRANSFORM_CRYPTO_POOL_IDLE_TIMEOUT_MS: 30000,
-    TRANSFORM_CRYPTO_POOL_MAX_OLD_GEN_MB: 64,
-    TRANSFORM_CRYPTO_POOL_MAX_YOUNG_GEN_MB: 32,
-  };
-});
 
 class TestableOps extends TransformToolHandlersOps {
   constructor() {
@@ -254,13 +237,24 @@ describe('TransformToolHandlersOps', () => {
       expect(diff).toContain('+b');
     });
 
-    it('uses fallback diff for large inputs', async () => {
+    it('keeps large inputs on the LCS path when the changed middle is small', async () => {
       const spy = vi.spyOn(ops as any, 'buildFallbackDiff');
 
       const oldText = Array.from({ length: 600 }, (_, i) => `L${i}`).join('\n');
       const newText = Array.from({ length: 600 }, (_, i) => (i === 300 ? `X${i}` : `L${i}`)).join(
         '\n',
       );
+
+      const diff = ops.testBuildDiff(oldText, newText);
+      expect(spy).not.toHaveBeenCalled();
+      expect(diff).toContain('-L300');
+      expect(diff).toContain('+X300');
+    });
+
+    it('uses fallback diff when the changed middle exceeds the LCS budget', async () => {
+      const spy = vi.spyOn(ops as any, 'buildFallbackDiff');
+      const oldText = Array.from({ length: 600 }, (_, i) => `L${i}`).join('\n');
+      const newText = Array.from({ length: 600 }, (_, i) => `X${i}`).join('\n');
 
       const diff = ops.testBuildDiff(oldText, newText);
       expect(spy).toHaveBeenCalledTimes(1);

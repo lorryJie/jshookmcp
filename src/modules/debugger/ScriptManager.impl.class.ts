@@ -2,6 +2,7 @@ import type { CDPSession } from 'rebrowser-puppeteer-core';
 import type { CodeCollector } from '@modules/collector/CodeCollector';
 import { setImmediate as waitForImmediate } from 'node:timers/promises';
 import { logger } from '@utils/logger';
+import { matchesWildcardPattern } from '@utils/matchesWildcardPattern';
 import {
   extractFunctionTreeCore,
   type ExtractFunctionTreeResult,
@@ -56,6 +57,10 @@ export class ScriptManager {
   private keywordIndex: Map<string, KeywordIndexEntry[]> = new Map();
   private scriptChunks: Map<string, ScriptChunk[]> = new Map();
   private readonly CHUNK_SIZE = 100 * 1024;
+  private readonly MAX_KEYWORD_INDEX_ENTRIES = 50000;
+  /** Throttle zombie-CDP probes — re-probe at most once per this interval. */
+  private readonly CDP_HEALTH_PROBE_INTERVAL_MS = 30_000;
+  private lastHealthProbeAt = 0;
 
   constructor(private collector: CodeCollector) {}
 
@@ -106,6 +111,8 @@ export class ScriptManager {
     await this.cdpSession.send('Debugger.enable');
 
     this.initialized = true;
+    // Fresh init implies a working session; skip the next throttled probe.
+    this.lastHealthProbeAt = Date.now();
     logger.info('ScriptManager initialized');
   }
 
@@ -134,10 +141,49 @@ export class ScriptManager {
     return this.init();
   }
 
-  async getAllScripts(includeSource = false, maxScripts = 1000): Promise<ScriptInfo[]> {
+  /**
+   * Ensure the CDP session is healthy (non-zombie).
+   * After a browser reattach, the old session reference may be non-null
+   * while the underlying WebSocket is dead. The probe is throttled to
+   * once per CDP_HEALTH_PROBE_INTERVAL_MS so hot-path callers don't pay
+   * the round-trip on every invocation.
+   */
+  private async ensureCdpSession(): Promise<void> {
     if (!this.cdpSession) {
       await this.init();
+      return;
     }
+    if (!this.initialized) {
+      await this.init();
+      return;
+    }
+    const now = Date.now();
+    if (now - this.lastHealthProbeAt < this.CDP_HEALTH_PROBE_INTERVAL_MS) {
+      return;
+    }
+    try {
+      await Promise.race([
+        this.cdpSession.send('Runtime.evaluate', { expression: '1', returnByValue: true }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('session_unreachable')), 3000),
+        ),
+      ]);
+      this.lastHealthProbeAt = now;
+    } catch {
+      logger.warn('ScriptManager CDP session unresponsive (zombie), reinitializing...');
+      this.cdpSession = null;
+      this.initialized = false;
+      this.lastHealthProbeAt = 0;
+      this.scripts.clear();
+      this.scriptsByUrl.clear();
+      this.keywordIndex.clear();
+      this.scriptChunks.clear();
+      await this.init();
+    }
+  }
+
+  async getAllScripts(includeSource = false, maxScripts = 1000): Promise<ScriptInfo[]> {
+    await this.ensureCdpSession();
 
     const scripts = Array.from(this.scripts.values());
 
@@ -205,20 +251,15 @@ export class ScriptManager {
       throw new Error('Either scriptId or url parameter must be provided');
     }
 
-    if (!this.cdpSession) {
-      await this.init();
-    }
+    await this.ensureCdpSession();
 
     let targetScript: ScriptInfo | undefined;
 
     if (scriptId) {
       targetScript = this.scripts.get(scriptId);
     } else if (url) {
-      const urlPattern = url.replace(/\*/g, '.*');
-      const regex = new RegExp(urlPattern);
-
       for (const [scriptUrl, scripts] of this.scriptsByUrl.entries()) {
-        if (regex.test(scriptUrl)) {
+        if (matchesWildcardPattern(scriptUrl, url)) {
           targetScript = scripts[0];
           break;
         }
@@ -245,16 +286,12 @@ export class ScriptManager {
   }
 
   async findScriptsByUrl(urlPattern: string): Promise<ScriptInfo[]> {
-    if (!this.cdpSession) {
-      await this.init();
-    }
+    await this.ensureCdpSession();
 
-    const pattern = urlPattern.replace(/\*/g, '.*');
-    const regex = new RegExp(pattern);
     const results: ScriptInfo[] = [];
 
     for (const [url, scripts] of this.scriptsByUrl.entries()) {
-      if (regex.test(url)) {
+      if (matchesWildcardPattern(url, urlPattern)) {
         results.push(...scripts);
       }
     }
@@ -287,9 +324,7 @@ export class ScriptManager {
       context: string;
     }>;
   }> {
-    if (!this.cdpSession) {
-      await this.init();
-    }
+    await this.ensureCdpSession();
 
     const { isRegex = false, caseSensitive = false, contextLines = 3, maxMatches = 100 } = options;
 
@@ -469,6 +504,20 @@ export class ScriptManager {
     }
 
     logger.debug(` Indexed ${this.keywordIndex.size} keywords for ${url}`);
+
+    // Evict oldest entries when keyword index exceeds capacity
+    if (this.keywordIndex.size > this.MAX_KEYWORD_INDEX_ENTRIES) {
+      const excess = this.keywordIndex.size - this.MAX_KEYWORD_INDEX_ENTRIES;
+      let evicted = 0;
+      for (const [key] of this.keywordIndex) {
+        if (evicted >= excess) break;
+        this.keywordIndex.delete(key);
+        evicted++;
+      }
+      logger.debug(
+        ` Keyword index pruned ${evicted} entries (cap: ${this.MAX_KEYWORD_INDEX_ENTRIES})`,
+      );
+    }
   }
 
   private chunkScript(scriptId: string, content: string): void {

@@ -15,6 +15,7 @@ import {
   POINTER_CHAIN_MAX_OFFSET,
   POINTER_CHAIN_MAX_RESULTS,
   POINTER_CHAIN_SCAN_CHUNK_SIZE,
+  USERSPACE_MAX_ADDRESS,
 } from '@src/constants';
 import type {
   PointerChain,
@@ -295,7 +296,7 @@ export class PointerChainEngine {
     const globalMax = targets[targets.length - 1]! + maxOffsetBig;
 
     let address = 0n;
-    const maxAddress = BigInt('0x7FFFFFFF0000');
+    const maxAddress = USERSPACE_MAX_ADDRESS;
 
     while (address < maxAddress) {
       const regionInfo = this.provider.queryRegion(handle, address);

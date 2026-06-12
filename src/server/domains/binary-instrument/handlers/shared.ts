@@ -16,6 +16,7 @@ import {
   type HookParameter,
   type HookTemplate,
 } from '@modules/binary-instrument';
+import type { AndroidRuntimeDumpSessionManager } from '@modules/binary-instrument/android-runtime-dump-session';
 import type { MCPServerContext } from '@server/MCPServer.context';
 import type { CapabilityStatus } from '@server/domains/shared/capabilities';
 import { capabilityFailure } from '@server/domains/shared/capabilities';
@@ -40,6 +41,8 @@ export interface BinaryInstrumentState {
   hookGen?: HookGenerator;
   hookCodeGenerator: HookCodeGenerator;
   unidbgRunner: UnidbgRunner;
+  androidRuntimeDumpManager?: AndroidRuntimeDumpSessionManager;
+  jadxSearchEngine?: import('@modules/jadx-search').JadxSearchEngine;
   context?: MCPServerContext;
 }
 
@@ -47,8 +50,8 @@ export function textResponse(text: string): { content: Array<{ type: string; tex
   return { content: [{ type: 'text', text }] };
 }
 
-export function jsonResponse(payload: unknown): { content: Array<{ type: string; text: string }> } {
-  return textResponse(JSON.stringify(payload));
+export function jsonResponse(body: unknown): { content: Array<{ type: string; text: string }> } {
+  return textResponse(JSON.stringify(body));
 }
 
 export function readRequiredString(args: Record<string, unknown>, key: string): string {
@@ -67,6 +70,14 @@ export function readOptionalString(args: Record<string, unknown>, key: string): 
 export function readOptionalNumber(args: Record<string, unknown>, key: string): number | undefined {
   const value = args[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+export function readOptionalBoolean(
+  args: Record<string, unknown>,
+  key: string,
+): boolean | undefined {
+  const value = args[key];
+  return typeof value === 'boolean' ? value : undefined;
 }
 
 export function readStringArray(args: Record<string, unknown>, key: string): string[] {
